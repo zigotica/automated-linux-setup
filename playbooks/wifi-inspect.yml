@@ -1,0 +1,13 @@
+---
+- name: Inspect Wi-Fi configuration without displaying network credentials
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Inspect saved Wi-Fi networks
+      ansible.builtin.import_tasks: ../tasks/opts/wifi/inspect.yml

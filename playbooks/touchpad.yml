@@ -1,0 +1,13 @@
+---
+- name: Configure persistent X11 touchpad natural scrolling
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Manage optional touchpad configuration
+      ansible.builtin.import_tasks: ../tasks/opts/touchpad/main.yml

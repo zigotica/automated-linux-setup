@@ -1,0 +1,20 @@
+---
+- name: Validate the hostname
+  ansible.builtin.assert:
+    that:
+      - system_hostname is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+    fail_msg: Define a valid system_hostname for this host.
+- name: Manage the active and persistent hostname
+  ansible.builtin.hostname:
+    name: "{{ system_hostname }}"
+    use: systemd
+  become: true
+
+- name: Manage the local hostname mapping while preserving other hosts entries
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1\t{{ system_hostname }}"
+    backup: false
+    create: false
+  become: true

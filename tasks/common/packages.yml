@@ -1,0 +1,8 @@
+---
+- name: Install the selected Debian profile packages
+  ansible.builtin.apt:
+    name: "{{ debian_packages }}"
+    state: present
+    install_recommends: false
+    update_cache: false
+  become: true

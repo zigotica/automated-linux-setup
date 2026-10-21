@@ -1,0 +1,16 @@
+widget_wifi() {
+  local wifi signal color=$red
+  local interface={{ wifi_interface | default('') | quote }}
+  wifi=$(iw dev "$interface" link 2>/dev/null | awk '/signal:/ {print $2 "dBm"; exit}')
+  if [[ $wifi =~ ^-?[0-9]+dBm$ ]]; then
+    signal=${wifi%dBm}
+    if (( signal >= -60 )); then
+      color=$green
+    elif (( signal >= -70 )); then
+      color=$yellow
+    fi
+  else
+    wifi='DOWN'
+  fi
+  printf '{"full_text":"WiFi %s","color":"%s","separator":false}' "$wifi" "$color"
+}

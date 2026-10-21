@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Firefox ESR
+Comment=Browse the Web
+Exec=firefox-esr %u
+Icon=firefox-esr
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+X-Ansible-Managed=family-firefox-launcher

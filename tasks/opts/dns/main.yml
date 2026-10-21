@@ -1,0 +1,79 @@
+---
+- name: Skip DNS management unless explicitly enabled
+  ansible.builtin.meta: end_play
+  when: not manage_dns
+
+- name: Require the shared network settings to be encrypted
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import pathlib
+        import sys
+
+        source = pathlib.Path(sys.argv[1])
+        if not source.is_file() or not source.read_bytes().startswith(b'$ANSIBLE_VAULT;'):
+          sys.exit('Shared network settings must exist as an encrypted Ansible Vault file.')
+      - "{{ playbook_dir }}/../vault/network.yml"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Load the shared encrypted network settings
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../vault/network.yml"
+    name: shared_network
+  no_log: true
+
+- name: Validate DNS inputs
+  ansible.builtin.assert:
+    that:
+      - shared_network.dns_servers is sequence
+      - shared_network.dns_servers is not string
+      - shared_network.dns_servers is not mapping
+      - shared_network.dns_servers | length > 0
+      - shared_network.dns_search_domain is match('^[a-zA-Z0-9.-]+$')
+      - dns_interface is match('^[a-zA-Z0-9_-]+$')
+    fail_msg: Define DNS servers, search domain, and dns_interface for the reviewed dhcpcd setup.
+  no_log: true
+
+- name: Validate DNS server addresses
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - 'import ipaddress, sys; [ipaddress.ip_address(value) for value in sys.argv[1:]]'
+      - "{{ item }}"
+  loop: "{{ shared_network.dns_servers }}"
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Inspect the existing dhcpcd configuration
+  ansible.builtin.stat:
+    path: /etc/dhcpcd.conf
+  register: dhcpcd_configuration
+
+- name: Require dhcpcd before managing its DNS settings
+  ansible.builtin.assert:
+    that:
+      - dhcpcd_configuration.stat.exists
+      - dhcpcd_configuration.stat.isreg
+    fail_msg: This recipe requires the reviewed dhcpcd-based DNS setup.
+- name: Persist DNS settings for the selected interface
+  ansible.builtin.blockinfile:
+    path: /etc/dhcpcd.conf
+    marker: '# {mark} ANSIBLE DNS {{ dns_interface }}'
+    insertafter: EOF
+    block: |
+      interface {{ dns_interface }}
+        static domain_name_servers={{ shared_network.dns_servers | join(' ') }}
+        static domain_name={{ shared_network.dns_search_domain }}
+        static domain_search={{ shared_network.dns_search_domain }}
+    backup: false
+    create: false
+  become: true
+  no_log: true
+  diff: false

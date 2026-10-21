@@ -1,0 +1,18 @@
+---
+- name: Configure packages
+  ansible.builtin.import_playbook: playbooks/site.yml
+
+- name: Configure the primary user and Figurine
+  ansible.builtin.import_playbook: playbooks/user-config.yml
+
+- name: Configure the optional family Xfce account
+  ansible.builtin.import_playbook: playbooks/family.yml
+
+- name: Configure touchpad natural scrolling
+  ansible.builtin.import_playbook: playbooks/touchpad.yml
+
+- name: Configure hostname and DNS
+  ansible.builtin.import_playbook: playbooks/network-identity.yml
+
+- name: Configure saved Wi-Fi networks
+  ansible.builtin.import_playbook: playbooks/wifi.yml

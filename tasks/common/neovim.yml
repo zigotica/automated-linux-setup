@@ -1,0 +1,123 @@
+---
+- name: Detect the Neovim release platform
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - min
+    filter:
+      - ansible_system
+      - ansible_architecture
+
+- name: Require a supported Neovim release platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.system == 'Linux'
+      - ansible_facts.architecture in neovim_architectures
+    fail_msg: Official Neovim archives are configured for Linux AMD64 and ARM64.
+
+- name: Read official Neovim release metadata on the control machine
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/neovim/neovim/releases?per_page=100
+    headers:
+      Accept: application/vnd.github+json
+    return_content: true
+  delegate_to: localhost
+  become: false
+  register: neovim_release_metadata
+  changed_when: false
+  check_mode: false
+
+- name: Find stable release tags in the requested Neovim series
+  ansible.builtin.set_fact:
+    neovim_series_releases: >-
+      {{ neovim_release_metadata.json
+         | rejectattr('draft') | rejectattr('prerelease')
+         | selectattr('tag_name', 'match', '^v' ~ (neovim_series | regex_escape) ~ '[.][0-9]+$')
+         | list }}
+
+- name: Require an available release in the requested series
+  ansible.builtin.assert:
+    that:
+      - neovim_series_releases | length > 0
+    fail_msg: No stable Neovim {{ neovim_series }}.x release was found in the latest 100 official releases.
+
+- name: Select the highest patch number within the requested series
+  ansible.builtin.set_fact:
+    neovim_tag: >-
+      {{ 'v' ~ neovim_series ~ '.' ~
+         (neovim_series_releases | map(attribute='tag_name')
+          | map('regex_replace', '^.*[.]', '') | map('int') | max | string) }}
+    neovim_arch: "{{ neovim_architectures[ansible_facts.architecture] }}"
+
+- name: Select the official Linux archive from the chosen tag
+  ansible.builtin.set_fact:
+    neovim_assets: >-
+      {{ (neovim_series_releases | selectattr('tag_name', 'equalto', neovim_tag) | first).assets
+         | selectattr('name', 'equalto', 'nvim-linux-' ~ neovim_arch ~ '.tar.gz') | list }}
+
+- name: Require a matching archive with a published SHA-256
+  ansible.builtin.assert:
+    that:
+      - neovim_assets | length == 1
+      - (neovim_assets | first).digest | default('', true) is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: The selected release has no matching archive or published SHA-256 checksum.
+
+- name: Set per-user installation directories for the selected release
+  ansible.builtin.set_fact:
+    neovim_asset: "{{ neovim_assets | first }}"
+    neovim_home: "{{ ansible_facts.getent_passwd[primary_user][4] }}"
+    neovim_install: "{{ ansible_facts.getent_passwd[primary_user][4] }}/.local/opt/neovim/current"
+
+- name: Report the selected Neovim release
+  ansible.builtin.debug:
+    msg: "Installing {{ neovim_tag }} for Linux {{ neovim_arch }} (tracking {{ neovim_series }}.x)."
+
+- name: Create the fixed Neovim installation directory
+  ansible.builtin.file:
+    path: "{{ neovim_install }}"
+    state: directory
+    mode: '0755'
+
+- name: Download the selected official archive with checksum verification
+  ansible.builtin.get_url:
+    url: "{{ neovim_asset.browser_download_url }}"
+    dest: "{{ neovim_install }}/release.tar.gz"
+    checksum: "{{ neovim_asset.digest }}"
+    mode: '0644'
+  when: not ansible_check_mode
+
+- name: Extract Neovim and its matching runtime files
+  ansible.builtin.unarchive:
+    src: "{{ neovim_install }}/release.tar.gz"
+    dest: "{{ neovim_install }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+  when: not ansible_check_mode
+
+- name: Check whether the release executable is available
+  ansible.builtin.stat:
+    path: "{{ neovim_install }}/bin/nvim"
+  register: neovim_executable
+
+- name: Inspect the previous Neovim launcher without following symlinks
+  ansible.builtin.stat:
+    path: "{{ neovim_home }}/.config/bin/nvim"
+    follow: false
+  register: neovim_old_launcher
+
+- name: Remove only the previous managed Neovim symlink
+  ansible.builtin.file:
+    path: "{{ neovim_home }}/.config/bin/nvim"
+    state: absent
+  when:
+    - neovim_executable.stat.exists
+    - neovim_old_launcher.stat.islnk | default(false)
+    - (neovim_old_launcher.stat.lnk_source | default('')).startswith(neovim_home ~ '/.local/opt/neovim/')
+
+- name: Explain first-install Neovim check-mode limitations
+  ansible.builtin.debug:
+    msg: Neovim is not extracted yet. A real run will download, verify, extract, and select it.
+  when:
+    - ansible_check_mode
+    - not neovim_executable.stat.exists

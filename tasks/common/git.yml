@@ -1,0 +1,16 @@
+---
+- name: Deploy shared Git configuration and global ignores
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/common/git/{{ item }}"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item }}"
+    mode: '0644'
+    backup: false
+    validate: "{{ '/usr/bin/git config --file %s --list' if item != '.gitignore_global' else omit }}"
+  loop:
+    - .gitconfig
+    - .gitconfig-personal
+    - .gitignore_global
+
+- name: Deploy an explicitly enabled private work Git configuration
+  ansible.builtin.import_tasks: ../opts/git-work/main.yml
+  when: manage_git_work

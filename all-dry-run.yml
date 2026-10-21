@@ -1,0 +1,32 @@
+---
+- name: Require check mode before previewing all managed configuration
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: tasks/validate_target.yml
+
+    - name: Refuse execution without --check
+      ansible.builtin.assert:
+        that:
+          - ansible_check_mode
+        fail_msg: This entry point requires --check. Use all.yml to apply configuration.
+
+- name: Preview the package configuration
+  ansible.builtin.import_playbook: playbooks/site.yml
+
+- name: Preview user configuration and Figurine
+  ansible.builtin.import_playbook: playbooks/user-config.yml
+
+- name: Preview the optional family Xfce account
+  ansible.builtin.import_playbook: playbooks/family.yml
+
+- name: Preview touchpad configuration
+  ansible.builtin.import_playbook: playbooks/touchpad.yml
+
+- name: Preview hostname and DNS configuration
+  ansible.builtin.import_playbook: playbooks/network-identity.yml
+
+- name: Preview saved Wi-Fi configuration
+  ansible.builtin.import_playbook: playbooks/wifi.yml

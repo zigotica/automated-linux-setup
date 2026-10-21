@@ -1,0 +1,29 @@
+---
+- name: Skip touchpad management unless explicitly enabled
+  ansible.builtin.meta: end_play
+  when: not manage_touchpad
+
+- name: Require a touchpad configuration source
+  ansible.builtin.assert:
+    that:
+      - touchpad_config_source is defined
+    fail_msg: Define touchpad_config_source before deploying touchpad settings.
+
+- name: Ensure the local X11 configuration directory exists
+  ansible.builtin.file:
+    path: /etc/X11/xorg.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Install persistent touchpad natural scrolling
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/{{ touchpad_config_source }}"
+    dest: /etc/X11/xorg.conf.d/30-touchpad.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: false
+  become: true

@@ -1,0 +1,152 @@
+---
+# Inspect authentication prerequisites before changing accounts or PAM files.
+- name: Read the existing console and SSH PAM service configuration
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop:
+    - /etc/pam.d/login
+    - /etc/pam.d/sshd
+  register: family_pam_services
+
+- name: Require the reviewed Debian PAM service layout
+  ansible.builtin.assert:
+    that:
+      - (family_pam_services.results[0].content | b64decode | regex_findall('(?m)^@include\s+common-auth\s*$') | length) == 1
+      - (family_pam_services.results[1].content | b64decode | regex_findall('(?m)^@include\s+common-account\s*$') | length) == 1
+    fail_msg: Review this machine's login and SSH PAM configuration before enabling family login.
+
+- name: Inspect the installed PAM modules
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/dpkg-query
+      - -L
+      - libpam-modules
+  register: family_pam_modules
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the SSH daemon PAM setting without changing the service
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/sshd
+      - -T
+  register: family_sshd_settings
+  changed_when: false
+  check_mode: false
+
+- name: Require PAM support before managing family access
+  ansible.builtin.assert:
+    that:
+      - family_pam_modules.stdout is search('(?m)/pam_succeed_if[.]so$')
+      - "'usepam yes' in family_sshd_settings.stdout_lines"
+    fail_msg: Family access requires pam_succeed_if and an SSH daemon configured with UsePAM yes.
+
+- name: Inspect the X11 and Xfce session launchers
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/bin/startx
+    - /usr/bin/startxfce4
+  register: family_session_launchers
+
+- name: Require installed desktop packages before creating a usable family session
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or (family_session_launchers.results | rejectattr('stat.exists') | list | length == 0)
+    fail_msg: Run playbooks/site.yml first to install the selected desktop packages.
+
+- name: Inspect any existing family account
+  ansible.builtin.getent:
+    database: passwd
+    key: family
+    fail_key: false
+
+- name: Inspect the expected family home without following symlinks
+  ansible.builtin.stat:
+    path: /home/family
+    follow: false
+  register: family_home
+
+- name: Require a safe family account and home location
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_passwd.family == none or (ansible_facts.getent_passwd.family[1] | int >= 1000 and ansible_facts.getent_passwd.family[4] == '/home/family')
+      - not family_home.stat.exists or (family_home.stat.isdir | default(false) and not family_home.stat.islnk | default(false))
+    fail_msg: Refusing to repurpose a system account, a different home path, or a symlink as the family home.
+
+# An account rule applies to SSH regardless of its authentication method.
+# This service-specific PAM change takes effect on new logins without a reload.
+- name: Deny the family account access through SSH
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/sshd
+    regexp: '^account\s+required\s+pam_succeed_if\.so\s+user != family(?:\s|$)'
+    insertbefore: BOF
+    line: 'account required pam_succeed_if.so user != family quiet'
+    create: false
+    backup: false
+
+- name: Ensure the family primary group exists
+  ansible.builtin.group:
+    name: family
+    state: present
+
+- name: Create the family account without a usable password or supplementary groups
+  ansible.builtin.user:
+    name: family
+    home: /home/family
+    shell: /bin/bash
+    create_home: true
+    # The new group is not actually created during a first check-mode run.
+    group: "{{ 'family' if not ansible_check_mode else omit }}"
+    groups: ''
+    append: false
+    password: '!'
+    update_password: always
+    state: present
+  no_log: true
+
+- name: Deploy only the family shell and Xfce startup files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/family/shell/{{ item }}"
+    dest: "/home/family/{{ item }}"
+    owner: family
+    group: family
+    mode: '0644'
+    backup: false
+    validate: '/bin/bash -n %s'
+  loop:
+    - .bash_profile
+    - .bashrc
+    - .xinitrc
+  when: not ansible_check_mode or family_home.stat.isdir | default(false)
+
+# Only this username on a physical virtual console bypasses password auth.
+# Existing account/session checks remain in force; common-auth is not modified.
+- name: Remove the legacy family login rule without a console restriction
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/login
+    regexp: '^auth\s+\[success=done default=ignore\]\s+pam_succeed_if\.so\s+user = family\s*$'
+    state: absent
+    create: false
+    backup: false
+
+- name: Allow passwordless family login only on local text consoles
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/login
+    regexp: '^auth\s+sufficient\s+pam_succeed_if\.so\s+user = family(?:\s|$)'
+    insertbefore: '^@include\s+common-auth\s*$'
+    line: >-
+      auth sufficient pam_succeed_if.so user = family
+      tty in tty1:tty2:tty3:tty4:tty5:tty6:/dev/tty1:/dev/tty2:/dev/tty3:/dev/tty4:/dev/tty5:/dev/tty6 quiet
+    create: false
+    backup: false
+
+- name: Explain first-install family check-mode limitations
+  ansible.builtin.debug:
+    msg: A real run will create the family home and deploy its startup files. Console login and Xfce need local testing.
+  when:
+    - ansible_check_mode
+    - not family_home.stat.isdir | default(false)
+
+- name: Configure the family's Xfce browser launcher
+  ansible.builtin.import_tasks: panel.yml

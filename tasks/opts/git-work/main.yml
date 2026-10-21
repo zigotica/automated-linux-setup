@@ -1,0 +1,44 @@
+---
+- name: Require a private work Git configuration source
+  ansible.builtin.assert:
+    that:
+      - git_work_config_file is defined
+      - git_work_config_file is string
+      - git_work_config_file | length > 0
+    fail_msg: Set git_work_config_file to an absolute control-machine path outside this repository.
+  no_log: true
+
+# Resolve symlinks too: an ignored file inside the repository is not a private source.
+- name: Verify the work Git source is a regular file outside the repository
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import pathlib
+        import sys
+
+        source = pathlib.Path(sys.argv[1])
+        repository = pathlib.Path(sys.argv[2]).resolve()
+        if not source.is_absolute():
+          sys.exit('The private source must use an absolute path.')
+        source = source.resolve(strict=True)
+        if source.is_relative_to(repository) or not source.is_file():
+          sys.exit('The private source must be a regular file outside this repository.')
+      - "{{ git_work_config_file }}"
+      - "{{ playbook_dir }}/.."
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Deploy the private work Git configuration without exposing its contents
+  ansible.builtin.copy:
+    src: "{{ git_work_config_file }}"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/.gitconfig-work"
+    mode: '0600'
+    backup: false
+    validate: '/usr/bin/git config --file %s --list'
+  no_log: true
+  diff: false

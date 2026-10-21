@@ -1,0 +1,61 @@
+---
+- name: Require a real import and a vault password
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+      - wifi_vault_password | length > 0
+    fail_msg: Run the import without --check and enter a nonempty vault password.
+  no_log: true
+
+- name: Check whether the local encrypted destination already exists
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+  delegate_to: localhost
+  become: false
+  register: wifi_vault_destination
+
+- name: Refuse to overwrite an existing vault
+  ansible.builtin.assert:
+    that:
+      - not wifi_vault_destination.stat.exists
+    fail_msg: The Wi-Fi vault already exists. Use ansible-vault edit to manage it.
+- name: Read the existing supplicant configuration into memory
+  ansible.builtin.slurp:
+    src: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+  become: true
+  register: wifi_original
+  no_log: true
+
+- name: Encrypt the configuration on the Mac without a plaintext file
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import base64
+        import json
+        import sys
+        from ansible.parsing.vault import VaultLib, VaultSecret
+
+        data = json.load(sys.stdin)
+        secret = VaultSecret(data['password'].encode())
+        vault = VaultLib([('default', secret)])
+        encrypted = vault.encrypt(base64.b64decode(data['content']), secret=secret)
+        sys.stdout.buffer.write(encrypted)
+    stdin: "{{ {'password': wifi_vault_password, 'content': wifi_original.content} | to_json }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  register: wifi_encrypted
+  no_log: true
+
+- name: Save only the encrypted configuration in the project
+  ansible.builtin.copy:
+    content: "{{ wifi_encrypted.stdout }}\n"
+    dest: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+    mode: '0600'
+    force: false
+    decrypt: false
+  delegate_to: localhost
+  become: false
+  no_log: true

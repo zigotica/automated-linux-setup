@@ -1,0 +1,4 @@
+PLAN.md
+.ansible/
+*.retry
+nvim.log

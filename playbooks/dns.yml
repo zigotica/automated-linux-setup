@@ -1,0 +1,13 @@
+---
+- name: Manage explicitly enabled dhcpcd DNS client settings
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Manage optional dns configuration
+      ansible.builtin.import_tasks: ../tasks/opts/dns/main.yml

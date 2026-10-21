@@ -1,0 +1,21 @@
+---
+- name: Deploy shared shell files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/common/shell/{{ item }}"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item }}"
+    mode: '0644'
+    backup: false
+    validate: '/bin/bash -n %s'
+  loop:
+    - .profile
+    - .bash_aliases
+    - .bash_functions
+    - .bashrc
+
+- name: Deploy the profile with desktop-only X11 startup
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/common/shell/bash_profile.j2"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/.bash_profile"
+    mode: '0664'
+    backup: false
+    validate: '/bin/bash -n %s'

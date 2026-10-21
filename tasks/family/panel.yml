@@ -1,0 +1,93 @@
+---
+# xfconfd owns its XML while running. Do not race it or stop the user's session.
+- name: Inspect the existing family's Xfce configuration daemon
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/pgrep
+      - -u
+      - family
+      - -x
+      - xfconfd
+  register: family_panel_daemon
+  changed_when: false
+  failed_when: family_panel_daemon.rc not in [0, 1]
+  check_mode: false
+  when: ansible_facts.getent_passwd.family != none
+
+- name: Require a logged-out family session before editing panel configuration
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or family_panel_daemon.rc | default(1) != 0
+    fail_msg: Log family out of Xfce before applying this recipe. Its xfconfd process must not be running.
+
+- name: Inspect the existing family panel layout
+  ansible.builtin.stat:
+    path: /home/family/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+  register: family_panel_layout
+
+# First check-mode runs cannot create the account, directories, or source packages.
+- name: Configure the family Firefox launcher without resetting the panel
+  when: not ansible_check_mode or family_panel_layout.stat.exists
+  block:
+    - name: Ensure the family panel configuration directories exist
+      ansible.builtin.file:
+        path: "/home/family/{{ item }}"
+        state: directory
+        owner: family
+        group: family
+        mode: '0755'
+      loop:
+        - .config
+        - .config/xfce4
+        - .config/xfce4/panel
+        - .config/xfce4/xfconf
+        - .config/xfce4/xfconf/xfce-perchannel-xml
+
+    - name: Seed Debian's panel layout only if family has none
+      ansible.builtin.copy:
+        src: /etc/xdg/xfce4/panel/default.xml
+        dest: /home/family/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+        remote_src: true
+        force: false
+        owner: family
+        group: family
+        mode: '0644'
+        backup: false
+
+    # Initial layouts refer to application IDs; initialized launchers may instead
+    # refer to generated filenames, whose .desktop content is handled below.
+    - name: Select Firefox ESR in generic browser references only
+      ansible.builtin.replace:
+        path: /home/family/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml
+        regexp: '(value=")(?:xfce4|exo)-web-browser\.desktop(")'
+        replace: '\g<1>firefox-esr.desktop\g<2>'
+        backup: false
+
+    - name: Find generic or already managed browser launcher files
+      ansible.builtin.find:
+        paths: /home/family/.config/xfce4/panel
+        recurse: true
+        file_type: file
+        patterns: '*.desktop'
+        read_whole_file: true
+        contains: '(?m)^(?:Exec=(?:exo-open|xfce4-open)\s+--launch\s+WebBrowser(?:\s+[^\n]*)?|X-Ansible-Managed=family-firefox-launcher)$'
+      register: family_browser_launchers
+
+    - name: Replace only the generic browser launcher while retaining its filename
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/family/xfce/firefox-esr.desktop"
+        dest: "{{ item.path }}"
+        owner: family
+        group: family
+        mode: '0644'
+        backup: false
+      loop: "{{ family_browser_launchers.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+- name: Explain initial panel check-mode limitations
+  ansible.builtin.debug:
+    msg: A real run will initialize the family panel from Debian's default layout and select Firefox ESR. Existing panels are preserved.
+  when:
+    - ansible_check_mode
+    - not family_panel_layout.stat.exists

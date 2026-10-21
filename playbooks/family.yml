@@ -1,0 +1,15 @@
+---
+- name: Configure the optional local-only family Xfce account
+  hosts: debian
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Configure the family desktop account
+      ansible.builtin.import_tasks: ../tasks/family/main.yml
+      when: manage_family

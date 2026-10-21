@@ -1,0 +1,19 @@
+---
+- name: Import existing Wi-Fi networks into an encrypted local vault
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+
+  vars_prompt:
+    - name: wifi_vault_password
+      prompt: Choose the password for the new Wi-Fi vault
+      private: true
+      confirm: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Import saved Wi-Fi networks
+      ansible.builtin.import_tasks: ../tasks/opts/wifi/import.yml

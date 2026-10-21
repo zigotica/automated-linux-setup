@@ -1,0 +1,59 @@
+---
+- name: Require per-host i3 function-key settings
+  ansible.builtin.assert:
+    that:
+      - i3_fn_keys is defined
+      - i3_fn_keys is mapping
+    fail_msg: Define i3_fn_keys in this desktop host's variables before deploying i3.
+
+- name: Validate complete and unique F1-F12 assignments
+  vars:
+    required_i3_fn_actions:
+      - brightness_down
+      - brightness_up
+      - volume_mute
+      - volume_down
+      - volume_up
+      - media_previous
+      - media_play_pause
+      - media_next
+  ansible.builtin.assert:
+    that:
+      - i3_fn_keys.keys() | list | sort == required_i3_fn_actions | sort
+      - i3_fn_keys.values() | select('integer') | list | length == required_i3_fn_actions | length
+      - i3_fn_keys.values() | min >= 1
+      - i3_fn_keys.values() | max <= 12
+      - i3_fn_keys.values() | unique | list | length == required_i3_fn_actions | length
+    fail_msg: Assign every i3 action a different integer from 1 to 12 in i3_fn_keys.
+
+- name: Ensure the i3 and widget directories exist
+  ansible.builtin.file:
+    path: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item }}"
+    state: directory
+  loop:
+    - .config/i3
+    - .config/i3/widgets
+
+- name: Deploy desktop files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/desktop/{{ item.src }}"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item.path }}"
+    mode: "{{ item.mode }}"
+    backup: false
+    validate: "{{ item.validate | default(omit) }}"
+  loop: "{{ desktop_config_files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: not item.src.endswith('.j2')
+
+- name: Render desktop files with host-specific values
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/desktop/{{ item.src }}"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item.path }}"
+    mode: "{{ item.mode }}"
+    backup: false
+    validate: "{{ item.validate | default(omit) }}"
+  loop: "{{ desktop_config_files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: item.src.endswith('.j2')

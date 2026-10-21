@@ -1,0 +1,40 @@
+---
+- name: Authorize a controller public key for SSH login
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+  become: false
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+    - name: Require an explicit local public key path
+      ansible.builtin.assert:
+        that:
+          - ssh_public_key_file is defined
+          - (ssh_public_key_file | default('')).endswith('.pub')
+          - ansible_user == primary_user
+        fail_msg: >-
+          Provide -e ssh_public_key_file=/absolute/path/to/key.pub and connect
+          as the host's primary_user. Private keys must stay on the Mac.
+
+    - name: Validate the public key on the Mac
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -l
+          - -f
+          - "{{ ssh_public_key_file }}"
+      delegate_to: localhost
+      check_mode: false
+      changed_when: false
+
+  tasks:
+    - name: Add the public key while preserving existing authorized keys
+      ansible.posix.authorized_key:
+        user: "{{ primary_user }}"
+        key: "{{ lookup('ansible.builtin.file', ssh_public_key_file) }}"
+        state: present
+        exclusive: false
+        follow: true

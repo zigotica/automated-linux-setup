@@ -1,0 +1,24 @@
+---
+- name: Install the newest Neovim patch release in the configured series
+  hosts: debian
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+  vars_files:
+    - ../vars/app_versions.yml
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+    - name: Require connection as the primary user
+      ansible.builtin.assert:
+        that:
+          - ansible_user == primary_user
+
+    - name: Resolve the primary user's home directory
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ primary_user }}"
+  tasks:
+    - name: Install the selected Neovim runtime
+      ansible.builtin.import_tasks: ../tasks/common/neovim.yml

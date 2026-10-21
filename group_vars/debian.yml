@@ -1,0 +1,107 @@
+---
+# Servers are the default profile.
+machine_profile: server
+
+# Optional features and their default settings.
+# Source paths are used only when the corresponding feature is enabled.
+manage_wifi: false
+manage_touchpad: false
+manage_dns: false
+manage_git_work: false
+manage_family: false
+touchpad_config_source: opts/touchpad/30-touchpad.conf
+desktop_config_files:
+  - src: xinitrc
+    path: .xinitrc
+    mode: '0664'
+    validate: '/bin/bash -n %s'
+  - src: i3/config.j2
+    path: .config/i3/config
+    mode: '0664'
+    validate: '/usr/bin/i3 -C -c %s'
+  - src: i3/widgets/cpu.sh
+    path: .config/i3/widgets/cpu.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/widgets/ram.sh
+    path: .config/i3/widgets/ram.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/widgets/disk.sh
+    path: .config/i3/widgets/disk.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/widgets/wifi.sh.j2
+    path: .config/i3/widgets/wifi.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/widgets/volume.sh
+    path: .config/i3/widgets/volume.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/widgets/clock.sh
+    path: .config/i3/widgets/clock.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
+  - src: i3/status.sh
+    path: .config/i3/status.sh
+    mode: '0775'
+    validate: '/bin/bash -n %s'
+debian_common_packages:
+  - fzf
+  - git
+  - less
+  - lsof
+  - pciutils
+  - ripgrep
+  - usbutils
+  - wget
+debian_wifi_packages:
+  - ifupdown
+  - iw
+  - rfkill
+  - wireless-tools
+  - wpasupplicant
+
+neovim_architectures:
+  x86_64: x86_64
+  aarch64: arm64
+
+# Archive SHA-256 values published with upstream release v2.1.1.
+figurine_releases:
+  x86_64:
+    arch: amd64
+    sha256: f2b1c076942c94009d133df0f304a234a0994bf590b40f2927668324d578306a
+  aarch64:
+    arch: arm64
+    sha256: 611550ddb31a75437be3f8587bcdd029d0d890f4d820b7f494a2c6615fecba10
+
+debian_desktop_packages:
+  - bluez
+  - brightnessctl
+  - dbus-x11
+  - ffmpeg
+  - firefox-esr
+  - i3status
+  - i3-wm
+  - libspa-0.2-bluetooth
+  - pipewire
+  - pipewire-pulse
+  - playerctl
+  - rtkit
+  - stterm
+  - suckless-tools
+  - wireplumber
+  - xinput
+  - x11-utils
+  - x11-xserver-utils
+  - xinit
+  - xserver-xorg-core
+  - xserver-xorg-input-libinput
+  - xfce4
+  - xfce4-terminal
+
+debian_packages: >-
+  {{ (debian_common_packages
+      + (debian_desktop_packages if machine_profile == 'desktop' else [])
+      + (debian_wifi_packages if manage_wifi else [])) | unique | list }}

@@ -1,0 +1,17 @@
+---
+- name: Deploy shared and profile-specific primary-user configuration
+  hosts: debian
+  gather_facts: false
+  become: false
+  any_errors_fatal: true
+
+  vars_files:
+    - ../vars/app_versions.yml
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Deploy user configuration
+      ansible.builtin.import_tasks: ../tasks/user_config.yml

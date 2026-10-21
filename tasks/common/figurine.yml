@@ -1,0 +1,68 @@
+---
+- name: Detect the target operating system and CPU architecture
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - min
+    filter:
+      - ansible_system
+      - ansible_architecture
+
+- name: Require a supported Figurine release platform
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.system == 'Linux'
+      - ansible_facts.architecture in figurine_releases
+    fail_msg: Figurine downloads currently support Linux AMD64 and ARM64.
+
+- name: Select the pinned release and cache directory
+  ansible.builtin.set_fact:
+    figurine_release: "{{ figurine_releases[ansible_facts.architecture] }}"
+    figurine_cache: "{{ ansible_facts.getent_passwd[primary_user][4] }}/.cache/figurine/{{ figurine_version }}-{{ ansible_facts.architecture }}"
+
+- name: Ensure the Figurine cache and executable directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ figurine_cache }}"
+    - "{{ ansible_facts.getent_passwd[primary_user][4] }}/.config/bin"
+
+- name: Download the pinned Figurine release with SHA-256 verification
+  ansible.builtin.get_url:
+    url: "https://github.com/arsham/figurine/releases/download/v{{ figurine_version }}/figurine_linux_{{ figurine_release.arch }}_v{{ figurine_version }}.tar.gz"
+    dest: "{{ figurine_cache }}/release.tar.gz"
+    checksum: "sha256:{{ figurine_release.sha256 }}"
+    mode: '0644'
+  when: not ansible_check_mode
+
+- name: Extract the verified release on the target
+  ansible.builtin.unarchive:
+    src: "{{ figurine_cache }}/release.tar.gz"
+    dest: "{{ figurine_cache }}"
+    remote_src: true
+  when: not ansible_check_mode
+
+- name: Check whether the extracted executable is available
+  ansible.builtin.stat:
+    path: "{{ figurine_cache }}/deploy/figurine"
+  register: figurine_extracted
+
+- name: Install Figurine for the primary user
+  ansible.builtin.copy:
+    src: "{{ figurine_cache }}/deploy/figurine"
+    dest: "{{ ansible_facts.getent_passwd[primary_user][4] }}/.config/bin/figurine"
+    remote_src: true
+    mode: '0755'
+    backup: false
+  when: figurine_extracted.stat.exists
+
+- name: Explain first-install check-mode limitations
+  ansible.builtin.debug:
+    msg: >-
+      Figurine is not cached yet. A real run will download, verify, extract,
+      and install the pinned release. These steps cannot be previewed fully.
+  when:
+    - ansible_check_mode
+    - not figurine_extracted.stat.exists

@@ -1,0 +1,30 @@
+---
+- name: Require deployment as the primary user
+  ansible.builtin.assert:
+    that:
+      - ansible_user == primary_user
+    fail_msg: Connect as primary_user to deploy their configuration without sudo.
+
+- name: Resolve the primary user's home directory
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ primary_user }}"
+
+- name: Install Figurine for every profile
+  ansible.builtin.import_tasks: common/figurine.yml
+
+- name: Install the selected Neovim runtime
+  ansible.builtin.import_tasks: common/neovim.yml
+
+- name: Deploy shared Neovim configuration
+  ansible.builtin.import_tasks: common/neovim-config.yml
+
+- name: Deploy shared shell configuration
+  ansible.builtin.import_tasks: common/shell.yml
+
+- name: Deploy shared Git configuration
+  ansible.builtin.import_tasks: common/git.yml
+
+- name: Deploy desktop-only user configuration
+  ansible.builtin.import_tasks: desktop/main.yml
+  when: machine_profile == 'desktop'

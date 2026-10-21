@@ -1,0 +1,44 @@
+---
+- name: Read supplicant configuration with network values redacted
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import pathlib
+        import re
+        import sys
+
+        path = pathlib.Path(sys.argv[1])
+        depth = 0
+        for raw in path.read_text().splitlines():
+          line = raw.strip()
+          if not line or line.startswith('#'):
+            continue
+          if line == '}':
+            depth = max(0, depth - 1)
+            print('}')
+            continue
+          if re.fullmatch(r'network\s*=\s*\{', line):
+            depth += 1
+            print('network={')
+            continue
+          key, separator, value = line.partition('=')
+          key = key.strip()
+          if not separator or not re.fullmatch(r'[a-zA-Z0-9_]+', key):
+            print('[unrecognized line redacted]')
+            continue
+          if depth or key not in ('country', 'ctrl_interface', 'update_config', 'ap_scan'):
+            print(f'  {key}=[redacted]')
+          else:
+            print(f'{key}={value}')
+      - "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+  become: true
+  register: wifi_inspection
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Display only the redacted configuration
+  ansible.builtin.debug:
+    var: wifi_inspection.stdout_lines

@@ -1,0 +1,13 @@
+---
+- name: Configure an explicitly selected Debian machine
+  hosts: debian
+  gather_facts: true
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Manage the curated package set
+      ansible.builtin.import_tasks: ../tasks/common/packages.yml

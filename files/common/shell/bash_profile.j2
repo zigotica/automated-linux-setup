@@ -1,0 +1,30 @@
+# Preserve private executable directories without duplicating PATH entries.
+for bin_dir in "$HOME/.local/bin" "$HOME/.config/bin" "$HOME/.local/opt/neovim/current/bin"; do
+  case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *) PATH="$bin_dir:$PATH" ;;
+  esac
+done
+unset bin_dir
+
+case ":$PATH:" in
+    *":/usr/sbin:"*) ;;
+    *) PATH="$PATH:/usr/sbin" ;;
+esac
+export PATH
+
+# Editors
+export EDITOR=nvim
+export VISUAL=nvim
+
+# Share interactive settings with terminal and SSH sessions.
+if [ -f "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+
+{% if machine_profile == 'desktop' %}
+# Start X11 only from an interactive login on the first local console.
+if [[ $- == *i* && -z ${DISPLAY:-} && -z ${SSH_CONNECTION:-} ]] && [[ "$(tty)" == /dev/tty1 ]]; then
+  exec startx
+fi
+{% endif %}

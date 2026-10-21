@@ -1,0 +1,28 @@
+---
+- name: Require one literal inventory hostname through --limit
+  ansible.builtin.assert:
+    that:
+      - ansible_limit is defined
+      - ansible_limit == inventory_hostname
+    fail_msg: >-
+      Refusing to continue. Pass one literal inventory hostname, for example
+      --limit blauet. Group names, all, wildcards, and multiple hosts are not
+      accepted.
+  run_once: true
+  delegate_to: localhost
+  become: false
+
+- name: Require a supported machine profile and boolean feature switches
+  ansible.builtin.assert:
+    that:
+      - machine_profile in ['server', 'desktop']
+      - manage_wifi is boolean
+      - manage_touchpad is boolean
+      - manage_dns is boolean
+      - manage_git_work is boolean
+      - manage_family is boolean
+      - not manage_touchpad or machine_profile == 'desktop'
+      - not manage_family or machine_profile == 'desktop'
+      - not manage_family or primary_user != 'family'
+      - not manage_family or ansible_user != 'family'
+    fail_msg: Choose server or desktop and YAML boolean switches. Touchpad and family require desktop; connect as a primary user other than family.

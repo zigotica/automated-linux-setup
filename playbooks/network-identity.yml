@@ -1,0 +1,16 @@
+---
+- name: Manage the local hostname independently of networking
+  hosts: debian
+  gather_facts: false
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Manage the hostname and local hosts mapping
+      ansible.builtin.import_tasks: ../tasks/common/hostname.yml
+
+- name: Configure optional persistent DNS settings
+  ansible.builtin.import_playbook: dns.yml

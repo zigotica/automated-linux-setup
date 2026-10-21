@@ -1,0 +1,67 @@
+---
+- name: Skip Wi-Fi management unless explicitly enabled
+  ansible.builtin.meta: end_play
+  when: not manage_wifi
+
+- name: Validate the power-saving setting
+  ansible.builtin.assert:
+    that:
+      - wifi_power_save in ['on', 'off']
+    fail_msg: wifi_power_save must be the quoted string 'on' or 'off'.
+
+- name: Check the local vault file
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import pathlib
+        import sys
+
+        path = pathlib.Path(sys.argv[1])
+        if not path.is_file() or not path.read_bytes().startswith(b'$ANSIBLE_VAULT;'):
+          sys.exit('Run playbooks/wifi-import.yml first. Wi-Fi source must be an encrypted vault file.')
+      - "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+
+- name: Inspect the existing interface configuration without exposing credentials
+  ansible.builtin.slurp:
+    src: /etc/network/interfaces
+  become: true
+  register: wifi_interfaces
+  no_log: true
+
+- name: Require the existing ifupdown supplicant integration
+  ansible.builtin.assert:
+    that:
+      - "(wifi_interfaces.content | b64decode) is search('(?m)^iface ' ~ wifi_interface ~ ' inet dhcp\\s*$')"
+      - "(wifi_interfaces.content | b64decode) is search('(?m)^\\s+wpa-conf /etc/wpa_supplicant/wpa_supplicant-' ~ wifi_interface ~ '\\.conf\\s*$')"
+    fail_msg: The existing network configuration differs from the reviewed setup.
+  no_log: true
+- name: Deploy the encrypted network configuration as a root-only supplicant file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+    dest: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+    owner: root
+    group: root
+    mode: '0600'
+    decrypt: true
+    backup: false
+  become: true
+  no_log: true
+  diff: false
+
+- name: Preserve the persistent Wi-Fi power-saving setting
+  ansible.builtin.lineinfile:
+    path: /etc/network/interfaces
+    regexp: '^\s*post-up /usr/sbin/iw dev {{ wifi_interface }} set power_save (on|off)\s*$'
+    line: '        post-up /usr/sbin/iw dev {{ wifi_interface }} set power_save {{ wifi_power_save }}'
+    insertafter: '^\s+wpa-conf /etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}\.conf\s*$'
+    create: false
+    backup: false
+  become: true
+  no_log: true
+  diff: false

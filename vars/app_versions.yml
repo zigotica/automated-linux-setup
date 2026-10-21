@@ -1,0 +1,6 @@
+---
+# Track the newest stable patch within this Neovim series.
+neovim_series: '0.12'
+
+# Exact release; update the matching checksums in group_vars/debian.yml too.
+figurine_version: '2.1.1'
