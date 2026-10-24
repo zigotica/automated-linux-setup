@@ -1,7 +1,15 @@
 widget_wifi() {
-  local wifi signal color=$red
+  local link wifi ssid signal color=$red
   local interface={{ wifi_interface | default('') | quote }}
-  wifi=$(iw dev "$interface" link 2>/dev/null | awk '/signal:/ {print $2 "dBm"; exit}')
+
+  link=$(iw dev "$interface" link 2>/dev/null)
+  ssid=$(awk '/^[[:space:]]*SSID:/ {
+      sub(/^[[:space:]]*SSID:[[:space:]]*/, "")
+      print
+      exit
+    }' <<< "$link")
+  wifi=$(awk '/signal:/ {print $2 "dBm"; exit}' <<< "$link")
+
   if [[ $wifi =~ ^-?[0-9]+dBm$ ]]; then
     signal=${wifi%dBm}
     if (( signal >= -60 )); then
@@ -9,8 +17,14 @@ widget_wifi() {
     elif (( signal >= -70 )); then
       color=$yellow
     fi
+
+    # Keep the i3bar JSON valid if the SSID contains quotes or backslashes.
+    ssid=${ssid//\\/\\\\}
+    ssid=${ssid//\"/\\\"}
+    wifi="$ssid $wifi"
   else
     wifi='DOWN'
   fi
+
   printf '{"full_text":"WiFi %s","color":"%s","separator":false}' "$wifi" "$color"
 }
