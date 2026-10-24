@@ -5,3 +5,5 @@ all:
       hosts:
         blauet:
           ansible_user: zgtc
+        hpesat:
+          ansible_user: zgtc

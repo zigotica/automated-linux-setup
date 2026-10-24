@@ -21,7 +21,7 @@
         path = pathlib.Path(sys.argv[1])
         if not path.is_file() or not path.read_bytes().startswith(b'$ANSIBLE_VAULT;'):
           sys.exit('Run playbooks/wifi-import.yml first. Wi-Fi source must be an encrypted vault file.')
-      - "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+      - "{{ playbook_dir }}/../vault/wifi.conf"
   delegate_to: localhost
   become: false
   changed_when: false
@@ -38,12 +38,17 @@
   ansible.builtin.assert:
     that:
       - "(wifi_interfaces.content | b64decode) is search('(?m)^iface ' ~ wifi_interface ~ ' inet dhcp\\s*$')"
-      - "(wifi_interfaces.content | b64decode) is search('(?m)^\\s+wpa-conf /etc/wpa_supplicant/wpa_supplicant-' ~ wifi_interface ~ '\\.conf\\s*$')"
+      - >-
+        ((wifi_interfaces.content | b64decode) is search('(?m)^\\s+wpa-conf /etc/wpa_supplicant/wpa_supplicant-' ~ wifi_interface ~ '\\.conf\\s*$'))
+        or
+        (((wifi_interfaces.content | b64decode) is search('(?m)^\\s+wpa-ssid\\s+.+$'))
+         and ((wifi_interfaces.content | b64decode) is search('(?m)^\\s+wpa-psk\\s+.+$')))
     fail_msg: The existing network configuration differs from the reviewed setup.
   no_log: true
+
 - name: Deploy the encrypted network configuration as a root-only supplicant file
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+    src: "{{ playbook_dir }}/../vault/wifi.conf"
     dest: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
     owner: root
     group: root
@@ -51,6 +56,74 @@
     decrypt: true
     backup: false
   become: true
+  no_log: true
+  diff: false
+
+- name: Replace inline credentials with the managed supplicant reference
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import os
+        import pathlib
+        import re
+        import sys
+        import tempfile
+
+        interface = sys.argv[1]
+        path = pathlib.Path(sys.argv[2])
+        reference = f'\twpa-conf /etc/wpa_supplicant/wpa_supplicant-{interface}.conf'
+        lines = path.read_text().splitlines()
+        output = []
+        active = False
+        found = False
+        referenced = False
+        for raw in lines:
+          stripped = raw.strip()
+          match = re.fullmatch(r'iface\s+(\S+)\s+inet\s+dhcp', stripped)
+          if match:
+            if active and not referenced:
+              output.append(reference)
+              referenced = True
+            active = match.group(1) == interface
+            found = found or active
+            output.append(raw)
+            continue
+          if active and stripped.startswith('iface '):
+            if not referenced:
+              output.append(reference)
+              referenced = True
+            active = False
+          if active and re.fullmatch(r'wpa-(ssid|psk)\s+.+', stripped):
+            continue
+          if active and stripped == reference.strip():
+            referenced = True
+          output.append(raw)
+        if active and not referenced:
+          output.append(reference)
+        if not found:
+          sys.exit(f'No DHCP stanza found for {interface}.')
+        rendered = '\n'.join(output) + '\n'
+        if rendered == path.read_text():
+          print('unchanged')
+          raise SystemExit
+        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.interfaces.', text=True)
+        try:
+          with os.fdopen(descriptor, 'w') as handle:
+            handle.write(rendered)
+          os.chmod(temporary, path.stat().st_mode)
+          os.chown(temporary, path.stat().st_uid, path.stat().st_gid)
+          os.replace(temporary, path)
+        finally:
+          if os.path.exists(temporary):
+            os.unlink(temporary)
+        print('changed')
+      - "{{ wifi_interface }}"
+      - /etc/network/interfaces
+  become: true
+  register: wifi_interface_migration
+  changed_when: wifi_interface_migration.stdout == 'changed'
   no_log: true
   diff: false
 

@@ -9,7 +9,7 @@
 
 - name: Check whether the local encrypted destination already exists
   ansible.builtin.stat:
-    path: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+    path: "{{ playbook_dir }}/../vault/wifi.conf"
   delegate_to: localhost
   become: false
   register: wifi_vault_destination
@@ -18,10 +18,21 @@
   ansible.builtin.assert:
     that:
       - not wifi_vault_destination.stat.exists
-    fail_msg: The Wi-Fi vault already exists. Use ansible-vault edit to manage it.
-- name: Read the existing supplicant configuration into memory
+    fail_msg: The shared Wi-Fi vault already exists. Use ansible-vault edit to manage it.
+
+- name: Check for a dedicated supplicant configuration
+  ansible.builtin.stat:
+    path: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+  become: true
+  register: wifi_supplicant_source
+  no_log: true
+
+- name: Read the existing Wi-Fi configuration into memory
   ansible.builtin.slurp:
-    src: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+    src: >-
+      {{ ('/etc/wpa_supplicant/wpa_supplicant-' ~ wifi_interface ~ '.conf')
+         if wifi_supplicant_source.stat.isreg | default(false)
+         else '/etc/network/interfaces' }}
   become: true
   register: wifi_original
   no_log: true
@@ -34,15 +45,52 @@
       - |
         import base64
         import json
+        import re
+        import shlex
         import sys
         from ansible.parsing.vault import VaultLib, VaultSecret
 
         data = json.load(sys.stdin)
+        content = base64.b64decode(data['content'])
+        if data['source'] == 'interfaces':
+          values = {}
+          active = False
+          for raw in content.decode().splitlines():
+            stripped = raw.strip()
+            match = re.fullmatch(r'iface\s+(\S+)\s+inet\s+dhcp', stripped)
+            if match:
+              active = match.group(1) == data['interface']
+              continue
+            if active and stripped.startswith('iface '):
+              active = False
+            if not active:
+              continue
+            setting = re.fullmatch(r'wpa-(ssid|psk)\s+(.+)', stripped)
+            if setting:
+              parsed = shlex.split(setting.group(2))
+              if len(parsed) != 1:
+                sys.exit('The inline Wi-Fi value has an unsupported format.')
+              values[setting.group(1)] = parsed[0]
+          if set(values) != {'ssid', 'psk'}:
+            sys.exit('The selected interface must contain one wpa-ssid and one wpa-psk.')
+          psk = values['psk'] if re.fullmatch(r'[0-9a-fA-F]{64}', values['psk']) else json.dumps(values['psk'])
+          content = (
+            'ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\n'
+            'update_config=1\n\n'
+            'network={\n'
+            f'  ssid={json.dumps(values["ssid"])}\n'
+            f'  psk={psk}\n'
+            '}\n'
+          ).encode()
         secret = VaultSecret(data['password'].encode())
         vault = VaultLib([('default', secret)])
-        encrypted = vault.encrypt(base64.b64decode(data['content']), secret=secret)
+        encrypted = vault.encrypt(content, secret=secret)
         sys.stdout.buffer.write(encrypted)
-    stdin: "{{ {'password': wifi_vault_password, 'content': wifi_original.content} | to_json }}"
+    stdin: >-
+      {{ {'password': wifi_vault_password,
+          'content': wifi_original.content,
+          'source': ('supplicant' if wifi_supplicant_source.stat.isreg | default(false) else 'interfaces'),
+          'interface': wifi_interface} | to_json }}
   delegate_to: localhost
   become: false
   changed_when: false
@@ -52,7 +100,7 @@
 - name: Save only the encrypted configuration in the project
   ansible.builtin.copy:
     content: "{{ wifi_encrypted.stdout }}\n"
-    dest: "{{ playbook_dir }}/../vault/{{ inventory_hostname }}-wifi.conf"
+    dest: "{{ playbook_dir }}/../vault/wifi.conf"
     mode: '0600'
     force: false
     decrypt: false

@@ -1,5 +1,0 @@
-xrdb -merge <<'EOF'
-st.font: Liberation Mono:pixelsize=18:antialias=true
-EOF
-
-exec i3

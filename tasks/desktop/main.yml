@@ -26,6 +26,12 @@
       - i3_fn_keys.values() | unique | list | length == required_i3_fn_actions | length
     fail_msg: Assign every i3 action a different integer from 1 to 12 in i3_fn_keys.
 
+- name: Validate the optional X11 keyboard layout
+  ansible.builtin.assert:
+    that:
+      - keyboard_layout is not defined or keyboard_layout is match('^[a-z0-9_-]+$')
+    fail_msg: Define keyboard_layout as a simple XKB layout name such as es or us.
+
 - name: Ensure the i3 and widget directories exist
   ansible.builtin.file:
     path: "{{ ansible_facts.getent_passwd[primary_user][4] }}/{{ item }}"

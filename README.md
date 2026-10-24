@@ -15,7 +15,7 @@ Ansible runs from a macOS control machine. Managed machines need no Ansible agen
 - `files/family/shell/` contains the separate family account's minimal shell and Xfce startup files.
 - `files/family/xfce/` contains the family's managed Firefox ESR panel launcher.
 - `files/opts/<feature>/` contains optional-feature configuration files when needed, currently touchpad settings.
-- `vault/<hostname>-wifi.conf` stores encrypted saved Wi-Fi networks.
+- `vault/wifi.conf` stores the encrypted saved Wi-Fi networks shared by all managed Debian hosts.
 - `vault/network.yml` stores encrypted DNS servers and search domain shared by all hosts with DNS management enabled.
 - `tasks/common/`, `tasks/desktop/`, `tasks/family/`, and `tasks/opts/<feature>/` contain the corresponding reusable task files; shared target safeguards and the user-deployment coordinator stay directly under `tasks/`.
 - `playbooks/` contains recipes that can run independently.
@@ -51,6 +51,8 @@ Register each target deliberately. The inventory hostname should resolve through
 
 For a first connection before DNS is ready, temporarily add `-e 'ansible_host=<bootstrap-ip>'` to the relevant command. Once hostname access works, omit the override. Host-key verification remains enabled; verify the server fingerprint before accepting a new key.
 
+As an explicit bootstrap alternative, pass SSH trust on first use and a temporary transport address only to the initial key-authorization command. Do not store either value in inventory. The first key offered is added to the control user's `known_hosts`; a later changed key is still rejected. Trust on first use is less resistant to first-connection impersonation than comparing a fingerprint out of band.
+
 Keep private keys and unencrypted credentials outside the repository. Store the vault password separately, for example in a password manager.
 
 ## Initial SSH access
@@ -67,6 +69,29 @@ Authorize an existing control-machine public key, substituting its actual filena
 ansible-playbook playbooks/ssh-key.yml --limit blauet -e "ssh_public_key_file=$HOME/.ssh/id_ed25519.pub" --ask-pass --check --diff
 ansible-playbook playbooks/ssh-key.yml --limit blauet -e "ssh_public_key_file=$HOME/.ssh/id_ed25519.pub" --ask-pass --diff
 ```
+
+When the new host's stable name does not resolve yet and trust on first use is acceptable, provide both bootstrap values only for these initial commands:
+
+```bash
+ansible-playbook playbooks/ssh-key.yml \
+  --limit hpesat \
+  -e 'ansible_host=<bootstrap-ip>' \
+  -e 'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new' \
+  -e "ssh_public_key_file=$HOME/.ssh/id_ed25519.pub" \
+  --ask-pass \
+  --check \
+  --diff
+
+ansible-playbook playbooks/ssh-key.yml \
+  --limit hpesat \
+  -e 'ansible_host=<bootstrap-ip>' \
+  -e 'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new' \
+  -e "ssh_public_key_file=$HOME/.ssh/id_ed25519.pub" \
+  --ask-pass \
+  --diff
+```
+
+Replace `<bootstrap-ip>` at invocation time. After key authorization, configure stable DNS or a private control-machine SSH mapping before running ordinary commands by inventory hostname. Neither the temporary address nor the trust-on-first-use policy belongs in this repository.
 
 This recipe runs as the primary user without sudo, preserves existing authorized keys and password login, and does not change the control machine's SSH configuration. A passphrase-protected key may need to be loaded into the running SSH agent.
 
@@ -147,6 +172,8 @@ The example host's `hardware_packages` list records firmware and microcode requi
 Shared shell files come from `files/common/shell/`; `bash_profile.j2` renders profile-specific X11 startup while retaining the shared PATH and editor settings. Git settings, the static `.gitconfig-personal`, and global ignores come from `files/common/git/`. Shared Neovim files come from `files/common/neovim/`. Figurine has installation tasks under `tasks/common/figurine.yml`, but no separate configuration files beyond its shared shell greeting. Destinations use `primary_user`'s account home directory.
 
 Desktop files use the shared `desktop_config_files` manifest in `group_vars/debian.yml`. Each entry selects a source relative to `files/desktop/`, destination-relative `path`, mode, and optional validator. Sources ending in `.j2` are rendered as templates; other sources are copied. The manifest includes `.xinitrc`, i3 configuration, the status coordinator, and six widgets, and is deployed only for the desktop profile. Host-specific file directories and source manifests are no longer needed. Bash and Git syntax checks and `i3 -C` run before actual replacements; check mode alone does not establish that all validators have run.
+
+Desktop hosts can define `keyboard_layout` with a simple XKB layout name such as `es` or `us`. The managed `.xinitrc` applies it before starting i3. When omitted, the X server's existing default is preserved.
 
 The supplied Bash configuration loads aliases and functions in an explicit order and uses a colored prompt with an SSH indicator. It displays a random-font Figurine greeting when the executable is available. Figurine is installed for both profiles. The login profile sets executable paths and Neovim editor variables; tty1 automatic X11 startup is rendered only for the desktop profile.
 
@@ -240,20 +267,20 @@ The example enables natural scrolling by matching touchpads rather than temporar
 
 ## Saved Wi-Fi networks
 
-Wi-Fi deployment runs only with `manage_wifi: true`; otherwise it exits before checking the vault or inspecting network files. The explicit import/inspection recipes remain available independently. Wi-Fi recipes currently support the reviewed ifupdown/wpa_supplicant layout: DHCP on `wifi_interface`, a `wpa-conf` reference to `/etc/wpa_supplicant/wpa_supplicant-<interface>.conf`, and a persistent power-saving command. They do not provision an arbitrary network stack from scratch.
+Wi-Fi deployment runs only with `manage_wifi: true`; otherwise it exits before checking the vault or inspecting network files. The explicit import/inspection recipes remain available independently. Wi-Fi recipes support the reviewed ifupdown/wpa_supplicant layouts: DHCP on `wifi_interface` with either a `wpa-conf` reference to `/etc/wpa_supplicant/wpa_supplicant-<interface>.conf` or Debian-installer `wpa-ssid` and `wpa-psk` directives inline in that interface's stanza. Import converts the inline pair into a standard single-network supplicant configuration entirely in memory before encryption. Deployment installs the root-only supplicant file and atomically replaces only the selected interface's inline credentials with its `wpa-conf` reference. The recipes do not provision an arbitrary network stack from scratch.
 
-For initial import, read the existing target configuration directly into an encrypted local vault:
+For the one-time initial import, read an existing target configuration directly into the shared encrypted local vault:
 
 ```bash
 ansible-playbook playbooks/wifi-import.yml --limit blauet --ask-become-pass
 ```
 
-Import prompts for a new vault password and confirmation, reads the protected file into memory, and saves only ciphertext to `vault/<inventory-hostname>-wifi.conf`. It preserves SSIDs, passwords, and priorities, refuses to overwrite an existing vault, and does not change the target.
+Import prompts for a new vault password and confirmation, reads the protected file into memory, and saves only ciphertext to `vault/wifi.conf`. It preserves SSIDs, passwords, and priorities, refuses to overwrite the shared vault, and does not change the target. Once the shared vault exists, onboard additional hosts by enabling `manage_wifi`; do not import their host-local copy over the shared source.
 
 Edit saved networks through Ansible Vault:
 
 ```bash
-ansible-vault edit vault/blauet-wifi.conf
+ansible-vault edit vault/wifi.conf
 ```
 
 The vault holds the complete supplicant configuration and is the source of truth for the deployed saved-network list. Preserve control-interface settings and network blocks you still need. Vault editing and deployment use temporary decrypted files; configure the editor to avoid secret-containing swap or backup files.
@@ -270,7 +297,7 @@ Deploy with:
 ansible-playbook playbooks/wifi.yml --limit blauet --ask-become-pass --ask-vault-pass
 ```
 
-Deployment writes the supplicant file as root with mode `0600` and hides sensitive task output and diffs. `wifi_power_save` controls the existing persistent `post-up` setting while preserving the surrounding interfaces configuration. Networking is not restarted and the active network is not switched.
+Deployment writes the supplicant file as root with mode `0600` and hides sensitive task output and diffs. `wifi_power_save` controls the existing persistent `post-up` setting while preserving the surrounding interfaces configuration. Check mode does not perform the inline-to-reference migration, so review the import and the ordinary preview before applying, then inspect the redacted result afterward. Networking is not restarted and the active network is not switched.
 
 ## Operational boundaries
 

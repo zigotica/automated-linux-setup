@@ -1,5 +1,12 @@
 ---
-- name: Read supplicant configuration with network values redacted
+- name: Check for a dedicated supplicant configuration
+  ansible.builtin.stat:
+    path: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+  become: true
+  register: wifi_supplicant_inspection_source
+  no_log: true
+
+- name: Read Wi-Fi configuration with network values redacted
   ansible.builtin.command:
     argv:
       - /usr/bin/python3
@@ -10,10 +17,27 @@
         import sys
 
         path = pathlib.Path(sys.argv[1])
+        source = sys.argv[2]
+        interface = sys.argv[3]
         depth = 0
+        active = source == 'supplicant'
         for raw in path.read_text().splitlines():
           line = raw.strip()
           if not line or line.startswith('#'):
+            continue
+          if source == 'interfaces':
+            match = re.fullmatch(r'iface\s+(\S+)\s+inet\s+dhcp', line)
+            if match:
+              active = match.group(1) == interface
+              if active:
+                print(line)
+              continue
+            if active and line.startswith('iface '):
+              active = False
+            if not active:
+              continue
+            setting = re.fullmatch(r'(wpa-[a-zA-Z0-9_-]+)\s+.*', line)
+            print(f'{setting.group(1)} [redacted]' if setting else '[unrecognized line redacted]')
             continue
           if line == '}':
             depth = max(0, depth - 1)
@@ -32,7 +56,12 @@
             print(f'  {key}=[redacted]')
           else:
             print(f'{key}={value}')
-      - "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+      - >-
+        {{ ('/etc/wpa_supplicant/wpa_supplicant-' ~ wifi_interface ~ '.conf')
+           if wifi_supplicant_inspection_source.stat.isreg | default(false)
+           else '/etc/network/interfaces' }}
+      - "{{ 'supplicant' if wifi_supplicant_inspection_source.stat.isreg | default(false) else 'interfaces' }}"
+      - "{{ wifi_interface }}"
   become: true
   register: wifi_inspection
   changed_when: false

@@ -11,7 +11,7 @@ manage_git_work: false
 manage_family: false
 touchpad_config_source: opts/touchpad/30-touchpad.conf
 desktop_config_files:
-  - src: xinitrc
+  - src: xinitrc.j2
     path: .xinitrc
     mode: '0664'
     validate: '/bin/bash -n %s'

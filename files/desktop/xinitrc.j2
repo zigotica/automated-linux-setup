@@ -1,0 +1,9 @@
+xrdb -merge <<'EOF'
+st.font: Liberation Mono:pixelsize=18:antialias=true
+EOF
+
+{% if keyboard_layout is defined %}
+setxkbmap {{ keyboard_layout | quote }}
+{% endif %}
+
+exec i3

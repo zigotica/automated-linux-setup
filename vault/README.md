@@ -4,6 +4,6 @@
 
 ## Wi-Fi networks
 
-`playbooks/wifi-import.yml` creates `<inventory-hostname>-wifi.conf` here as an encrypted Ansible Vault file. The decrypted content is the complete existing wpa_supplicant configuration, including SSIDs, passwords, and priorities. Never place a plaintext copy or vault password file in this directory.
+`playbooks/wifi-import.yml` creates the shared `wifi.conf` here as an encrypted Ansible Vault file. A dedicated existing wpa_supplicant file is preserved completely. Debian-installer inline `wpa-ssid` and `wpa-psk` directives are converted in memory into a standard single-network supplicant configuration before encryption. The decrypted content includes SSIDs and passwords. Every managed Debian host with Wi-Fi enabled deploys this same source. Never place a plaintext copy or vault password file in this directory.
 
-Edit the encrypted file with `ansible-vault edit vault/blauet-wifi.conf`. This invokes your editor on a temporary decrypted file, so use a trusted local editor and avoid editor backup or swap files for secrets.
+Edit the encrypted file with `ansible-vault edit vault/wifi.conf`. This invokes your editor on a temporary decrypted file, so use a trusted local editor and avoid editor backup or swap files for secrets.

@@ -169,6 +169,67 @@ class Profiles(unittest.TestCase):
     desktop_wired = self.desktop | {"manage_wifi": False}
     self.assertFalse(set(self.packages(desktop_wired)) & set(self.defaults["debian_wifi_packages"]))
 
+  def test_wifi_uses_one_shared_encrypted_source(self):
+    shared = ROOT / "vault/wifi.conf"
+    self.assertTrue(shared.read_bytes().startswith(b"$ANSIBLE_VAULT;"))
+    for task_file in ("tasks/opts/wifi/import.yml", "tasks/opts/wifi/main.yml"):
+      content = (ROOT / task_file).read_text()
+      self.assertIn("vault/wifi.conf", content)
+      self.assertNotIn("inventory_hostname }}-wifi.conf", content)
+    self.assertFalse(list((ROOT / "vault").glob("*-wifi.conf")))
+
+  def test_wifi_inspection_redacts_inline_installer_credentials(self):
+    tasks = load("tasks/opts/wifi/inspect.yml")
+    command = next(task for task in tasks if "ansible.builtin.command" in task)
+    script = command["ansible.builtin.command"]["argv"][2]
+    with tempfile.TemporaryDirectory() as directory:
+      interfaces = Path(directory) / "interfaces"
+      interfaces.write_text("""auto lo
+iface lo inet loopback
+allow-hotplug wlo1
+iface wlo1 inet dhcp
+  wpa-ssid PrivateNetwork
+  wpa-psk secret-password
+""")
+      result = subprocess.run([sys.executable, "-c", script, str(interfaces), "interfaces", "wlo1"],
+                              capture_output=True, text=True, check=True)
+    self.assertEqual(result.stdout.splitlines(),
+                     ["iface wlo1 inet dhcp", "wpa-ssid [redacted]", "wpa-psk [redacted]"])
+    self.assertNotIn("PrivateNetwork", result.stdout)
+    self.assertNotIn("secret-password", result.stdout)
+    self.assertIs(command["no_log"], True)
+
+  def test_wifi_deployment_migrates_only_selected_inline_stanza(self):
+    tasks = load("tasks/opts/wifi/main.yml")
+    command = next(task for task in tasks if task["name"] == "Replace inline credentials with the managed supplicant reference")
+    script = command["ansible.builtin.command"]["argv"][2]
+    with tempfile.TemporaryDirectory() as directory:
+      interfaces = Path(directory) / "interfaces"
+      interfaces.write_text("""auto lo
+iface lo inet loopback
+allow-hotplug wlo1
+iface wlo1 inet dhcp
+  wpa-ssid PrivateNetwork
+  wpa-psk secret-password
+allow-hotplug wlan1
+iface wlan1 inet dhcp
+  wpa-ssid PreserveThis
+  wpa-psk preserve-this-secret
+""")
+      first = subprocess.run([sys.executable, "-c", script, "wlo1", str(interfaces)],
+                             capture_output=True, text=True, check=True)
+      migrated = interfaces.read_text()
+      second = subprocess.run([sys.executable, "-c", script, "wlo1", str(interfaces)],
+                              capture_output=True, text=True, check=True)
+    self.assertEqual(first.stdout.strip(), "changed")
+    self.assertEqual(second.stdout.strip(), "unchanged")
+    self.assertIn("wpa-conf /etc/wpa_supplicant/wpa_supplicant-wlo1.conf", migrated)
+    self.assertNotIn("PrivateNetwork", migrated)
+    self.assertNotIn("secret-password", migrated)
+    self.assertIn("PreserveThis", migrated)
+    self.assertIn("preserve-this-secret", migrated)
+    self.assertIs(command["no_log"], True)
+
   def test_rendered_login_profiles(self):
     template = ENV.from_string((ROOT / "files/common/shell/bash_profile.j2").read_text())
     for variables in (self.defaults, self.desktop):
@@ -177,6 +238,16 @@ class Profiles(unittest.TestCase):
         self.assertEqual("exec startx" in rendered, variables["machine_profile"] == "desktop")
         self.assertIn(".local/opt/neovim/current/bin", rendered)
         subprocess.run(["bash", "-n"], input=rendered, text=True, check=True)
+
+  def test_desktop_xinit_applies_only_declared_keyboard_layout(self):
+    template = ENV.from_string((ROOT / "files/desktop/xinitrc.j2").read_text())
+    spanish = template.render(keyboard_layout="es")
+    inherited = template.render()
+    self.assertIn("setxkbmap es", spanish)
+    self.assertNotIn("setxkbmap", inherited)
+    for rendered in (spanish, inherited):
+      self.assertIn("exec i3", rendered)
+      subprocess.run(["bash", "-n"], input=rendered, text=True, check=True)
 
   def test_example_manifest_sources(self):
     for entry in self.desktop["desktop_config_files"]:
