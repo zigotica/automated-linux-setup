@@ -7,7 +7,7 @@ Ansible runs from a macOS control machine. Managed machines need no Ansible agen
 ## Configuration model
 
 - `inventory.yml` explicitly registers managed machines and SSH users.
-- `group_vars/debian.yml` defines safe server defaults, package groups, platform mappings, and archive checksums.
+- `group_vars/debian.yml` defines safe server defaults, package groups, shared desktop Bluetooth devices and retry policy, platform mappings, and archive checksums.
 - `vars/app_versions.yml` centralizes the upstream app versions: the tracked Neovim series and the exact Figurine release. Both user-configuration and standalone Neovim recipes load it, including through the combined entry points.
 - `host_vars/<hostname>.yml` selects the machine profile, optional features, and machine-specific values such as interfaces and DNS.
 - `files/common/` contains shared shell, Git, and Neovim configuration.
@@ -23,7 +23,7 @@ Ansible runs from a macOS control machine. Managed machines need no Ansible agen
 
 Folders describe purpose rather than the machine they were imported from. There is no host-named files directory, and no `server/` directory is needed until there are server-only files or tasks. Optional Wi-Fi and DNS logic lives under `tasks/opts/`; it needs no separate static files directory. Wi-Fi credentials stay encrypted under `vault/`.
 
-`machine_profile` is either `server` (the default) or `desktop`. Both receive the common command-line package set, shared primary-user shell files, Neovim, and Figurine. The desktop profile additionally installs i3, Xfce core and its terminal, X11, audio/Bluetooth, browser, and related utilities. It deploys the primary user's declared i3 files and enables tty1 X11 startup in that user's login profile. Xfce does not replace i3. No display manager or large desktop application bundle is selected. Wi-Fi, touchpad, DNS management, and the family account remain explicit opt-ins.
+`machine_profile` is either `server` (the default) or `desktop`. Both receive the common command-line package set, shared primary-user shell files, Neovim, and Figurine. The desktop profile additionally installs i3, Xfce core and its terminal, X11, PipeWire/WirePlumber audio with BlueZ support, browser, and related utilities. It configures Bluetooth audio, deploys the primary user's declared i3 files, and enables tty1 X11 startup in that user's login profile. Xfce does not replace i3. No display manager or large desktop application bundle is selected. Wi-Fi, touchpad, DNS management, and the family account remain explicit opt-ins.
 
 Optional switches default to `false`: `manage_wifi`, `manage_touchpad`, `manage_dns`, `manage_git_work`, and `manage_family`. Use YAML booleans, not quoted strings. Touchpad and family management require the desktop profile; Wi-Fi, DNS, and private work Git configuration can be enabled independently on either profile. Disabling a feature skips management, without uninstalling packages, deleting existing files, or stopping services. The managed primary-user login profile is still rendered for the selected profile, so selecting `server` removes its automatic X11 startup block. Disabling family management does not remove its account, files, or authentication rules.
 
@@ -126,7 +126,7 @@ Apply the same configuration:
 ansible-playbook all.yml --limit blauet --diff --ask-become-pass --ask-vault-pass
 ```
 
-The execution order is selected packages, shared/profile-specific primary-user configuration (including Neovim and Figurine), optional family account, optional touchpad, hostname and optional DNS, then optional Wi-Fi. `--ask-vault-pass` is needed when either `manage_wifi: true` or `manage_dns: true`: Wi-Fi uses the host's encrypted supplicant file, and DNS uses the shared encrypted `vault/network.yml`. For a server with both features disabled, omit `--ask-vault-pass` from both commands.
+The execution order is selected packages, desktop-only Bluetooth audio, shared/profile-specific primary-user configuration (including Neovim and Figurine), optional family account, optional touchpad, hostname and optional DNS, then optional Wi-Fi. `--ask-vault-pass` is needed when either `manage_wifi: true` or `manage_dns: true`: Wi-Fi uses the host's encrypted supplicant file, and DNS uses the shared encrypted `vault/network.yml`. For a server with both features disabled, omit `--ask-vault-pass` from both commands.
 
 `all-dry-run.yml` requires `--check`. Each recipe enforces a literal single-host `--limit`; omitted limits, groups, wildcards, and multiple-host selections are rejected before configuration tasks. The sudo password authorizes privileged tasks; the vault password decrypts shared network settings and saved Wi-Fi configuration.
 
@@ -139,6 +139,8 @@ Run a recipe independently when only one configuration area is needed:
 | Recipe | Purpose |
 | --- | --- |
 | `playbooks/site.yml` | Install the declared Debian package set |
+| `playbooks/bluetooth.yml` | Configure and verify desktop-only BlueZ and PipeWire/WirePlumber Bluetooth audio |
+| `playbooks/bluetooth-pair.yml` | Perform one explicitly authorized, bounded pairing attempt for vaulted desktop audio devices |
 | `playbooks/neovim.yml` | Install the newest stable patch in the configured Neovim series |
 | `playbooks/user-config.yml` | Deploy shared/profile-specific user files, Neovim, and Figurine |
 | `playbooks/family.yml` | Manage the optional passwordless local-console family account and Xfce startup |
@@ -177,7 +179,7 @@ Desktop hosts can define `keyboard_layout` with a simple XKB layout name such as
 
 The supplied Bash configuration loads aliases and functions in an explicit order and uses a colored prompt with an SSH indicator. It displays a random-font Figurine greeting when the executable is available. Figurine is installed for both profiles. The login profile sets executable paths and Neovim editor variables; tty1 automatic X11 startup is rendered only for the desktop profile.
 
-The supplied i3 status coordinator sources widget functions once and refreshes every two seconds. An array controls widget order, and CPU sample state stays in the coordinator shell. The Wi-Fi widget is rendered with the selected host's `wifi_interface`; without a configured interface it reports DOWN.
+The supplied i3 status coordinator sources widget functions once and refreshes every two seconds. An array controls widget order, and CPU sample state stays in the coordinator shell. The temperature widget reads both Linux `coretemp` sensors and ACPI thermal zones directly from sysfs, displays the hottest reading, uses the lowest exposed critical trip point as its reference, turns yellow 15°C below critical and red 5°C below critical, and reports `TEMP --` when no sensor is available. Including ACPI zones matters on systems whose firmware shutdown sensor runs hotter than the CPU core sensors. The Wi-Fi widget is rendered with the selected host's `wifi_interface`; without a configured interface it reports DOWN.
 
 ### Per-host i3 function keys
 
@@ -196,6 +198,55 @@ i3_fn_keys:
 ```
 
 Other laptops can assign different numbers without changing the shared i3 template. These are ordinary F-key bindings, preserving the existing setup; the laptop's Fn-lock setting determines how its physical keys generate those events. The media bindings use `playerctl previous`, `playerctl play-pause`, and `playerctl next` for [MPRIS-enabled players](https://manpages.debian.org/trixie/playerctl/playerctl.1.en.html). The package is installed only for desktops, and no player daemon is started. These settings apply to the primary user's i3 session, not the separate family Xfce session. Deploy packages before the user configuration to install the new dependency, then reload i3 with Mod+Shift+c. Deployment validates the rendered configuration with `i3 -C` but does not reload the session automatically.
+
+## Bluetooth audio
+
+Every Debian desktop installs BlueZ, PipeWire, PipeWire's ALSA, PulseAudio-compatible and Bluetooth SPA components, WirePlumber, and rtkit. Servers inherit none of those desktop packages or Bluetooth tasks. The encrypted `vault/bluetooth.yml` file identifies the shared AirPods without exposing their address in inventory, tests, or documentation, so both `blauet` and `hpesat` use the same protected device definition.
+
+The Bluetooth recipe preserves unrelated BlueZ settings and pairing records. It manages only `AutoEnable`, `ReconnectAttempts`, and `ReconnectIntervals` in the existing `[Policy]` section of `/etc/bluetooth/main.conf`, enables and starts `bluetooth.service`, and installs an additive WirePlumber 0.5 fragment for the declared devices. The fragment enables A2DP playback and HFP/HSP headset profiles after BlueZ establishes a device link. WirePlumber's BlueZ monitor is the component that exposes connected Bluetooth audio devices to PipeWire; see the [WirePlumber Bluetooth documentation](https://pipewire.pages.freedesktop.org/wireplumber/daemon/configuration/bluetooth.html).
+
+Native BlueZ reconnect is intentionally limited to three attempts at 5, 15, and 30 seconds. This gives a recently disconnected device time to return without continuous scanning or repeated connection pressure while the AirPods are in use by the Mac. The project does not install a polling process, cron entry, or systemd timer. BlueZ's native policy is bounded, not an indefinite availability watcher: if the AirPods remain unavailable beyond the retry window, connect them manually. WirePlumber's `bluez5.auto-connect` connects audio profiles on an existing BlueZ device connection; it does not replace the BlueZ radio-link policy.
+
+Install packages and configure Bluetooth separately on each desktop because every recipe requires one literal inventory hostname:
+
+```bash
+ansible-playbook playbooks/site.yml --limit blauet --check --diff --ask-become-pass
+ansible-playbook playbooks/site.yml --limit blauet --diff --ask-become-pass
+ansible-playbook playbooks/bluetooth.yml --limit blauet --check --diff --ask-become-pass
+ansible-playbook playbooks/bluetooth.yml --limit blauet --diff --ask-become-pass
+
+ansible-playbook playbooks/site.yml --limit hpesat --check --diff --ask-become-pass
+ansible-playbook playbooks/site.yml --limit hpesat --diff --ask-become-pass
+ansible-playbook playbooks/bluetooth.yml --limit hpesat --check --diff --ask-become-pass
+ansible-playbook playbooks/bluetooth.yml --limit hpesat --diff --ask-become-pass
+```
+
+Initial pairing still requires the AirPods nearby and in physical pairing mode. Disconnect them from the Mac, hold the case button until the light flashes white, and run the dedicated pairing recipe for exactly one desktop. This recipe is deliberately excluded from `all.yml` and `all-dry-run.yml`; it rejects check mode and requires the explicit `bluetooth_pair_now=true` authorization:
+
+```bash
+ansible-playbook playbooks/bluetooth-pair.yml \
+  --limit hpesat \
+  -e bluetooth_pair_now=true \
+  --ask-become-pass \
+  --ask-vault-pass
+```
+
+The pairing recipe uses a temporary BlueZ `NoInputNoOutput` agent, a 20-second discovery window, one pairing attempt bounded to 60 seconds, and one connection attempt bounded to 30 seconds. It restores the controller's previous pairability and stops discovery started by the recipe even when pairing fails. Success requires BlueZ to report paired, bonded, trusted, and connected state; all device addresses and command results are suppressed with `no_log`. Repeat the physical pairing procedure and explicit recipe on the other desktop. Pairing and trust are stored by BlueZ under its existing persistent system state and survive reboots.
+
+After a real apply, start a fresh graphical login or reboot before testing the newly installed WirePlumber fragment. On each desktop, verify the adapter, system service, pairing record, active user audio services, and PipeWire graph:
+
+```bash
+bluetoothctl list
+systemctl is-enabled bluetooth.service
+systemctl is-active bluetooth.service
+bluetoothctl info <airpods-mac>
+systemctl --user is-active pipewire.service pipewire-pulse.service wireplumber.service
+wpctl status
+```
+
+`bluetoothctl info` must show `Paired: yes`, `Trusted: yes`, and, while in use, `Connected: yes`. `wpctl status` must show the AirPods Bluetooth device and an A2DP sink. Select that sink if it is not already the default, play known audio, and confirm audibly that output reaches both earbuds. Command output alone cannot verify physical audio playback.
+
+To test reconnection, keep `bluetoothctl monitor` open, connect the AirPods to the tested Debian desktop, make them temporarily unavailable, then make them available again without connecting them to the Mac. Confirm a new `Connected: yes` state within the bounded retry window and confirm the A2DP sink returns in `wpctl status`. Test one Debian desktop at a time. Bluetooth pairing does not establish ownership or priority: when `blauet`, `hpesat`, and the Mac all know the same AirPods, their native connection policies can race, the AirPods may prefer the most recent device, and a connection already held by the Mac normally prevents either Debian host from taking it. This recipe intentionally does not override that behavior with aggressive retries.
 
 ## Family Xfce account
 

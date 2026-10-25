@@ -1,0 +1,18 @@
+# Managed by Ansible. WirePlumber connects audio profiles after BlueZ establishes
+# the device link; this does not scan for or repeatedly connect absent devices.
+monitor.bluez.rules = [
+{% for device in desktop_bluetooth.audio_devices %}
+  {
+    matches = [
+      {
+        device.name = "bluez_card.{{ device.address | replace(':', '_') }}"
+      }
+    ]
+    actions = {
+      update-props = {
+        bluez5.auto-connect = [ a2dp_sink hfp_hf hsp_hs ]
+      }
+    }
+  }
+{% endfor %}
+]

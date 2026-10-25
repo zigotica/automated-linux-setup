@@ -1,0 +1,22 @@
+---
+- name: Pair declared Bluetooth audio devices on an explicitly selected Debian desktop
+  hosts: debian
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Load encrypted desktop Bluetooth devices
+      ansible.builtin.include_vars:
+        file: ../vault/bluetooth.yml
+        name: desktop_bluetooth
+      no_log: true
+      when: machine_profile == 'desktop'
+
+    - name: Run the explicitly authorized pairing workflow
+      ansible.builtin.import_tasks: ../tasks/desktop/bluetooth-pair.yml
+      when: machine_profile == 'desktop'

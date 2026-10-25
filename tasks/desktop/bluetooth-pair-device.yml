@@ -1,0 +1,133 @@
+---
+- name: Inspect existing pairing state
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - info
+      - "{{ bluetooth_pair_device.address }}"
+  register: bluetooth_pair_initial_info
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Perform one bounded pairing attempt
+  when: bluetooth_pair_initial_info.stdout | default('') is not search('(?m)^\s*Paired:\s+yes\s*$')
+  no_log: true
+  block:
+    - name: Temporarily enable controller pairability
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bluetoothctl
+          - pairable
+          - 'on'
+      changed_when: false
+
+    - name: Run a bounded discovery window
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bluetoothctl
+          - --timeout
+          - '20'
+          - scan
+          - 'on'
+      register: bluetooth_pair_scan
+      changed_when: false
+      failed_when: bluetooth_pair_scan.rc not in [0, 124]
+      when: not bluetooth_pair_was_discovering
+
+    - name: Attempt pairing once with a temporary agent
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bluetoothctl
+          - --agent
+          - NoInputNoOutput
+          - --timeout
+          - '60'
+          - pair
+          - "{{ bluetooth_pair_device.address }}"
+      register: bluetooth_pair_attempt
+      changed_when: bluetooth_pair_attempt.rc == 0
+      failed_when: false
+      no_log: true
+  always:
+    - name: Stop discovery started by this recipe
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bluetoothctl
+          - scan
+          - 'off'
+      changed_when: false
+      failed_when: false
+      when: not bluetooth_pair_was_discovering
+
+    - name: Restore pairability after the attempt
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bluetoothctl
+          - pairable
+          - "{{ 'on' if bluetooth_pair_was_pairable else 'off' }}"
+      changed_when: false
+      failed_when: false
+
+- name: Inspect pairing result
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - info
+      - "{{ bluetooth_pair_device.address }}"
+  register: bluetooth_pair_result
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Require a paired and bonded device before trust
+  ansible.builtin.assert:
+    that:
+      - bluetooth_pair_result.stdout | default('') is search('(?m)^\s*Paired:\s+yes\s*$')
+      - bluetooth_pair_result.stdout | default('') is search('(?m)^\s*Bonded:\s+yes\s*$')
+    fail_msg: Pairing did not complete. Confirm physical pairing mode and disconnect the device from other computers before retrying.
+  no_log: true
+
+- name: Trust the paired device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - trust
+      - "{{ bluetooth_pair_device.address }}"
+  register: bluetooth_pair_trust
+  changed_when: bluetooth_pair_result.stdout | default('') is not search('(?m)^\s*Trusted:\s+yes\s*$')
+  no_log: true
+
+- name: Connect the paired device once
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - --timeout
+      - '30'
+      - connect
+      - "{{ bluetooth_pair_device.address }}"
+  register: bluetooth_pair_connect
+  changed_when: bluetooth_pair_result.stdout | default('') is not search('(?m)^\s*Connected:\s+yes\s*$')
+  failed_when: false
+  no_log: true
+
+- name: Verify pairing, trust, and connection
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - info
+      - "{{ bluetooth_pair_device.address }}"
+  register: bluetooth_pair_final_info
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Require the complete Bluetooth device state
+  ansible.builtin.assert:
+    that:
+      - bluetooth_pair_final_info.stdout | default('') is search('(?m)^\s*Paired:\s+yes\s*$')
+      - bluetooth_pair_final_info.stdout | default('') is search('(?m)^\s*Bonded:\s+yes\s*$')
+      - bluetooth_pair_final_info.stdout | default('') is search('(?m)^\s*Trusted:\s+yes\s*$')
+      - bluetooth_pair_final_info.stdout | default('') is search('(?m)^\s*Connected:\s+yes\s*$')
+    fail_msg: The device did not reach paired, bonded, trusted, and connected state.
+  no_log: true

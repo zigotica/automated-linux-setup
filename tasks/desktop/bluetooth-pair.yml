@@ -1,0 +1,64 @@
+---
+- name: Require explicit real-run pairing authorization
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+      - bluetooth_pair_now | default(false) | bool
+    fail_msg: Rerun without --check and pass -e bluetooth_pair_now=true only after putting the declared device in pairing mode.
+
+- name: Validate encrypted pairing devices
+  ansible.builtin.assert:
+    that:
+      - desktop_bluetooth.audio_devices is sequence
+      - desktop_bluetooth.audio_devices is not string
+      - desktop_bluetooth.audio_devices is not mapping
+      - desktop_bluetooth.audio_devices | length > 0
+      - item.keys() | list | sort == ['address', 'name']
+      - item.name is string
+      - item.name | length > 0
+      - item.address is match('^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$')
+    fail_msg: The encrypted Bluetooth vault must contain named devices with uppercase MAC addresses.
+  loop: "{{ desktop_bluetooth.audio_devices }}"
+  no_log: true
+
+- name: Require active Bluetooth before pairing
+  ansible.builtin.systemd_service:
+    name: bluetooth.service
+    enabled: true
+    state: started
+
+- name: Inspect the controller before temporary pairing changes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - show
+  register: bluetooth_pair_controller
+  changed_when: false
+
+- name: Require an available powered controller
+  ansible.builtin.assert:
+    that:
+      - bluetooth_pair_controller.stdout is search('(?m)^\s*Controller\s+')
+      - bluetooth_pair_controller.stdout is search('(?m)^\s*Powered:\s+yes\s*$')
+    fail_msg: Pairing requires an available powered Bluetooth controller.
+
+- name: Remember controller state for cleanup
+  ansible.builtin.set_fact:
+    bluetooth_pair_was_pairable: "{{ bluetooth_pair_controller.stdout is search('(?m)^\\s*Pairable:\\s+yes\\s*$') }}"
+    bluetooth_pair_was_discovering: "{{ bluetooth_pair_controller.stdout is search('(?m)^\\s*Discovering:\\s+yes\\s*$') }}"
+
+- name: Pair each declared Bluetooth audio device once
+  ansible.builtin.include_tasks: bluetooth-pair-device.yml
+  loop: "{{ desktop_bluetooth.audio_devices }}"
+  loop_control:
+    loop_var: bluetooth_pair_device
+    label: "{{ bluetooth_pair_device.name }}"
+  no_log: true
+
+- name: Restore controller pairability
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - pairable
+      - "{{ 'on' if bluetooth_pair_was_pairable else 'off' }}"
+  changed_when: false

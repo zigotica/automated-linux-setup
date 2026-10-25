@@ -16,9 +16,9 @@ wifi_power_save: 'off'
 i3_fn_keys:
   brightness_down: 2
   brightness_up: 3
-  volume_mute: 6
-  volume_down: 7
-  volume_up: 8
-  media_previous: 9
-  media_play_pause: 10
-  media_next: 11
+  volume_mute: 11
+  volume_down: 9
+  volume_up: 10
+  media_previous: 6
+  media_play_pause: 7
+  media_next: 8

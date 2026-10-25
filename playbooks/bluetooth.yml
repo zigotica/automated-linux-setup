@@ -1,0 +1,28 @@
+---
+- name: Configure Bluetooth audio on an explicitly selected Debian desktop
+  hosts: debian
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Load encrypted desktop Bluetooth devices
+      ansible.builtin.include_vars:
+        file: ../vault/bluetooth.yml
+        name: desktop_bluetooth
+      no_log: true
+      when: machine_profile == 'desktop'
+
+    - name: Configure desktop Bluetooth audio
+      ansible.builtin.import_tasks: ../tasks/desktop/bluetooth.yml
+      when: machine_profile == 'desktop'
+
+  handlers:
+    - name: Restart Bluetooth
+      ansible.builtin.systemd_service:
+        name: bluetooth.service
+        state: restarted

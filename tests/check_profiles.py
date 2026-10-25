@@ -27,6 +27,7 @@ class Profiles(unittest.TestCase):
   def setUp(self):
     self.defaults = load("group_vars/debian.yml")
     self.desktop = self.defaults | load("host_vars/blauet.yml")
+    self.hpesat = self.defaults | load("host_vars/hpesat.yml")
 
   def packages(self, variables):
     return ast.literal_eval(ENV.from_string(variables["debian_packages"]).render(variables))
@@ -61,6 +62,117 @@ class Profiles(unittest.TestCase):
     self.assertIn("i3-wm", self.packages(self.desktop))
     self.assertNotIn("task-xfce-desktop", self.packages(self.desktop))
     self.assertTrue(self.desktop["manage_family"])
+
+  def test_bluetooth_audio_is_desktop_only_and_complete(self):
+    required = {
+      "bluez",
+      "libspa-0.2-bluetooth",
+      "pipewire",
+      "pipewire-alsa",
+      "pipewire-pulse",
+      "wireplumber",
+    }
+    self.assertTrue(required <= set(self.packages(self.desktop)))
+    self.assertFalse(required & set(self.packages(self.defaults)))
+    self.assertNotIn("desktop_bluetooth_audio_devices", self.defaults)
+    self.assertEqual(len(self.defaults["desktop_bluetooth_reconnect_intervals"]),
+                     self.defaults["desktop_bluetooth_reconnect_attempts"])
+    self.assertTrue(all(interval > 0 for interval in self.defaults["desktop_bluetooth_reconnect_intervals"]))
+
+    bluetooth_vault = (ROOT / "vault/bluetooth.yml").read_text().splitlines()
+    self.assertEqual(bluetooth_vault[0], "$ANSIBLE_VAULT;1.1;AES256")
+    self.assertGreater(len(bluetooth_vault), 1)
+    self.assertTrue(all(re.fullmatch(r"[0-9a-f]+", line) for line in bluetooth_vault[1:]))
+
+    play = load("playbooks/bluetooth.yml")[0]
+    vault = play["tasks"][0]
+    self.assertEqual(vault["ansible.builtin.include_vars"]["file"], "../vault/bluetooth.yml")
+    self.assertEqual(vault["ansible.builtin.include_vars"]["name"], "desktop_bluetooth")
+    self.assertIs(vault["no_log"], True)
+    self.assertEqual(vault["when"], "machine_profile == 'desktop'")
+    task = play["tasks"][1]
+    self.assertEqual(task["ansible.builtin.import_tasks"], "../tasks/desktop/bluetooth.yml")
+    self.assertEqual(task["when"], "machine_profile == 'desktop'")
+    for entry in ("all.yml", "all-dry-run.yml"):
+      self.assertTrue(any(item.get("ansible.builtin.import_playbook") == "playbooks/bluetooth.yml"
+                          for item in load(entry)))
+
+  def test_bluetooth_uses_native_bounded_reconnection(self):
+    tasks = load("tasks/desktop/bluetooth.yml")
+    rendered = str(tasks)
+    self.assertIn("ReconnectAttempts", rendered)
+    self.assertIn("ReconnectIntervals", rendered)
+    self.assertIn("AutoEnable", rendered)
+    self.assertNotIn("systemd timer", rendered.lower())
+    self.assertNotIn("scan on", rendered.lower())
+    self.assertFalse(any("ansible.builtin.cron" in task for task in tasks))
+
+    service = next(task["ansible.builtin.systemd_service"] for task in tasks
+                   if task.get("name") == "Enable and start Bluetooth")
+    self.assertEqual(service["name"], "bluetooth.service")
+    self.assertIs(service["enabled"], True)
+    self.assertEqual(service["state"], "started")
+
+    trust = next(task for task in tasks if task.get("name") == "Trust paired Bluetooth audio devices")
+    self.assertEqual(trust["ansible.builtin.command"]["argv"][1], "trust")
+    self.assertTrue(any("Paired:" in condition for condition in trust["when"]))
+    self.assertFalse(any(" pair" in str(task.get("ansible.builtin.command", {})) for task in tasks))
+
+    protected_tasks = {
+      "Validate shared desktop Bluetooth settings",
+      "Validate desktop Bluetooth audio devices",
+      "Enable Bluetooth audio profiles for the managed devices",
+      "Inspect managed Bluetooth audio devices",
+      "Trust paired Bluetooth audio devices",
+      "Reinspect managed Bluetooth audio devices",
+      "Confirm trust for devices that are already paired",
+      "Report devices that still require interactive pairing",
+    }
+    for task in tasks:
+      if task["name"] in protected_tasks:
+        self.assertIs(task["no_log"], True, task["name"])
+    template_task = next(task for task in tasks
+                         if task["name"] == "Enable Bluetooth audio profiles for the managed devices")
+    self.assertIs(template_task["diff"], False)
+
+    template = (ROOT / "files/desktop/wireplumber/51-bluetooth-audio.conf.j2").read_text()
+    rendered_template = ENV.from_string(template).render(
+      self.defaults | {"desktop_bluetooth": {"audio_devices": [{"name": "Headphones", "address": "00:00:00:00:00:00"}]}})
+    self.assertIn("bluez_card.00_00_00_00_00_00", rendered_template)
+    self.assertIn("bluez5.auto-connect = [ a2dp_sink hfp_hf hsp_hs ]", rendered_template)
+
+  def test_bluetooth_pairing_is_explicit_bounded_and_non_disclosing(self):
+    play = load("playbooks/bluetooth-pair.yml")[0]
+    self.assertTrue(play["become"])
+    self.assertEqual(play["tasks"][0]["ansible.builtin.include_vars"]["file"], "../vault/bluetooth.yml")
+    self.assertIs(play["tasks"][0]["no_log"], True)
+    self.assertEqual(play["tasks"][1]["ansible.builtin.import_tasks"],
+                     "../tasks/desktop/bluetooth-pair.yml")
+    for entry in ("all.yml", "all-dry-run.yml"):
+      self.assertFalse(any(item.get("ansible.builtin.import_playbook") == "playbooks/bluetooth-pair.yml"
+                           for item in load(entry)))
+
+    workflow = load("tasks/desktop/bluetooth-pair.yml")
+    gate = workflow[0]["ansible.builtin.assert"]["that"]
+    self.assertIn("not ansible_check_mode", gate)
+    self.assertIn("bluetooth_pair_now | default(false) | bool", gate)
+    include = next(task for task in workflow if "ansible.builtin.include_tasks" in task)
+    self.assertEqual(include["ansible.builtin.include_tasks"], "bluetooth-pair-device.yml")
+    self.assertIs(include["no_log"], True)
+
+    device = load("tasks/desktop/bluetooth-pair-device.yml")
+    pair_block = next(task["block"] for task in device if "block" in task)
+    scan = next(task for task in pair_block if task["name"] == "Run a bounded discovery window")
+    pair = next(task for task in pair_block if task["name"] == "Attempt pairing once with a temporary agent")
+    self.assertIn("20", scan["ansible.builtin.command"]["argv"])
+    self.assertIn("NoInputNoOutput", pair["ansible.builtin.command"]["argv"])
+    self.assertIn("60", pair["ansible.builtin.command"]["argv"])
+    secret_tasks = [task for task in device
+                    if "bluetooth_pair_device.address" in str(task)]
+    secret_tasks += [task for task in pair_block
+                     if "bluetooth_pair_device.address" in str(task)]
+    self.assertTrue(secret_tasks)
+    self.assertTrue(all(task.get("no_log") is True for task in secret_tasks))
 
   def test_family_account_is_separate_and_opt_in(self):
     play = load("playbooks/family.yml")[0]
@@ -252,9 +364,21 @@ iface wlan1 inet dhcp
   def test_example_manifest_sources(self):
     for entry in self.desktop["desktop_config_files"]:
       self.assertTrue((ROOT / "files/desktop" / entry["src"]).is_file())
-    self.assertEqual(len(self.desktop["desktop_config_files"]), 9)
+    self.assertEqual(len(self.desktop["desktop_config_files"]), 10)
     self.assertTrue((ROOT / "files" / self.defaults["touchpad_config_source"]).is_file())
     self.assertFalse((ROOT / "files/blauet").exists())
+
+  def test_temperature_widget_uses_cpu_hardware_thresholds(self):
+    widget = (ROOT / "files/desktop/i3/widgets/temp.sh").read_text()
+    subprocess.run(["bash", "-n"], input=widget, text=True, check=True)
+    self.assertIn("/sys/class/hwmon/hwmon*", widget)
+    self.assertIn("/sys/class/thermal/thermal_zone*", widget)
+    self.assertIn("coretemp", widget)
+    self.assertIn("trip_point_*_type", widget)
+    self.assertIn("_crit", widget)
+    self.assertNotIn("sensors", widget)
+    status = (ROOT / "files/desktop/i3/status.sh").read_text()
+    self.assertIn("widgets=(cpu temp ram disk wifi volume clock)", status)
 
   def test_i3_function_keys_render_per_host(self):
     template = ENV.from_string((ROOT / "files/desktop/i3/config.j2").read_text())
@@ -278,6 +402,21 @@ iface wlan1 inet dhcp
     self.assertEqual(self.desktop["i3_fn_keys"]["media_previous"], 9)
     self.assertEqual(self.desktop["i3_fn_keys"]["media_play_pause"], 10)
     self.assertEqual(self.desktop["i3_fn_keys"]["media_next"], 11)
+    self.assertEqual(self.hpesat["i3_fn_keys"], {
+      "brightness_down": 2,
+      "brightness_up": 3,
+      "volume_mute": 11,
+      "volume_down": 9,
+      "volume_up": 10,
+      "media_previous": 6,
+      "media_play_pause": 7,
+      "media_next": 8,
+    })
+    hpesat_rendered = template.render(i3_fn_keys=self.hpesat["i3_fn_keys"])
+    for action, command in expected.items():
+      self.assertIn(
+        f"bindsym F{self.hpesat['i3_fn_keys'][action]} exec --no-startup-id {command}",
+        hpesat_rendered.splitlines())
     self.assertIn("playerctl", self.packages(self.desktop))
     self.assertNotIn("playerctl", self.packages(self.defaults))
     entry = next(item for item in self.desktop["desktop_config_files"] if item["path"] == ".config/i3/config")

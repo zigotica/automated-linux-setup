@@ -16,6 +16,9 @@
 - name: Preview the package configuration
   ansible.builtin.import_playbook: playbooks/site.yml
 
+- name: Preview desktop Bluetooth audio
+  ansible.builtin.import_playbook: playbooks/bluetooth.yml
+
 - name: Preview user configuration and Figurine
   ansible.builtin.import_playbook: playbooks/user-config.yml
 

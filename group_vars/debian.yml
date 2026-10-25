@@ -23,6 +23,10 @@ desktop_config_files:
     path: .config/i3/widgets/cpu.sh
     mode: '0644'
     validate: '/bin/bash -n %s'
+  - src: i3/widgets/temp.sh
+    path: .config/i3/widgets/temp.sh
+    mode: '0644'
+    validate: '/bin/bash -n %s'
   - src: i3/widgets/ram.sh
     path: .config/i3/widgets/ram.sh
     mode: '0644'
@@ -47,6 +51,11 @@ desktop_config_files:
     path: .config/i3/status.sh
     mode: '0775'
     validate: '/bin/bash -n %s'
+desktop_bluetooth_reconnect_attempts: 3
+desktop_bluetooth_reconnect_intervals:
+  - 5
+  - 15
+  - 30
 debian_common_packages:
   - fzf
   - git
@@ -86,6 +95,7 @@ debian_desktop_packages:
   - i3-wm
   - libspa-0.2-bluetooth
   - pipewire
+  - pipewire-alsa
   - pipewire-pulse
   - playerctl
   - rtkit

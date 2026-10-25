@@ -1,0 +1,211 @@
+---
+- name: Validate shared desktop Bluetooth settings
+  ansible.builtin.assert:
+    that:
+      - desktop_bluetooth.audio_devices is sequence
+      - desktop_bluetooth.audio_devices is not string
+      - desktop_bluetooth.audio_devices is not mapping
+      - desktop_bluetooth.audio_devices | length > 0
+      - desktop_bluetooth_reconnect_attempts is integer
+      - desktop_bluetooth_reconnect_attempts > 0
+      - desktop_bluetooth_reconnect_intervals is sequence
+      - desktop_bluetooth_reconnect_intervals is not string
+      - desktop_bluetooth_reconnect_intervals is not mapping
+      - desktop_bluetooth_reconnect_intervals | length == desktop_bluetooth_reconnect_attempts
+      - desktop_bluetooth_reconnect_intervals | select('integer') | list | length == desktop_bluetooth_reconnect_attempts
+      - desktop_bluetooth_reconnect_intervals | min > 0
+    fail_msg: Define at least one Bluetooth device and one positive retry interval per native BlueZ reconnect attempt.
+  no_log: true
+
+- name: Validate desktop Bluetooth audio devices
+  ansible.builtin.assert:
+    that:
+      - item.keys() | list | sort == ['address', 'name']
+      - item.name is string
+      - item.name | length > 0
+      - item.address is match('^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$')
+    fail_msg: Each desktop Bluetooth audio device needs a name and an uppercase MAC address.
+  loop: "{{ desktop_bluetooth.audio_devices }}"
+  loop_control:
+    label: "{{ item.name | default('invalid device') }}"
+  no_log: true
+
+- name: Inspect the installed BlueZ configuration
+  ansible.builtin.stat:
+    path: /etc/bluetooth/main.conf
+  register: bluetooth_main_configuration
+
+- name: Require the BlueZ package configuration
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or bluetooth_main_configuration.stat.isreg | default(false)
+    fail_msg: Run playbooks/site.yml first so BlueZ and the desktop audio packages are installed.
+
+- name: Ensure the native BlueZ policy section exists
+  ansible.builtin.lineinfile:
+    path: /etc/bluetooth/main.conf
+    regexp: '^\[Policy\]$'
+    line: '[Policy]'
+    insertafter: EOF
+    create: false
+    backup: false
+  when: bluetooth_main_configuration.stat.isreg | default(false)
+  notify: Restart Bluetooth
+
+- name: Configure bounded native BlueZ reconnection
+  ansible.builtin.lineinfile:
+    path: /etc/bluetooth/main.conf
+    regexp: "^#?{{ item.key }}=.*$"
+    line: "{{ item.key }}={{ item.value }}"
+    insertafter: '^\[Policy\]$'
+    create: false
+    backup: false
+  loop:
+    - key: AutoEnable
+      value: 'true'
+    - key: ReconnectAttempts
+      value: "{{ desktop_bluetooth_reconnect_attempts }}"
+    - key: ReconnectIntervals
+      value: "{{ desktop_bluetooth_reconnect_intervals | join(',') }}"
+  when: bluetooth_main_configuration.stat.isreg | default(false)
+  notify: Restart Bluetooth
+
+- name: Ensure the WirePlumber fragment directory exists
+  ansible.builtin.file:
+    path: /etc/wireplumber/wireplumber.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Enable Bluetooth audio profiles for the managed devices
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/desktop/wireplumber/51-bluetooth-audio.conf.j2"
+    dest: /etc/wireplumber/wireplumber.conf.d/51-bluetooth-audio.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: false
+  no_log: true
+  diff: false
+
+- name: Enable and start Bluetooth
+  ansible.builtin.systemd_service:
+    name: bluetooth.service
+    enabled: true
+    state: started
+
+- name: Apply changed BlueZ policy before inspecting devices
+  ansible.builtin.meta: flush_handlers
+
+- name: Check whether bluetoothctl is installed
+  ansible.builtin.stat:
+    path: /usr/bin/bluetoothctl
+  register: bluetoothctl_binary
+
+- name: Require Bluetooth tooling after package installation
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or bluetoothctl_binary.stat.isreg | default(false)
+    fail_msg: Run playbooks/site.yml first so bluetoothctl is installed.
+
+- name: Inspect Bluetooth controllers
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - list
+  register: bluetooth_controllers
+  changed_when: false
+  check_mode: false
+  when:
+    - not ansible_check_mode
+    - bluetoothctl_binary.stat.isreg | default(false)
+
+- name: Require an available Bluetooth controller
+  ansible.builtin.assert:
+    that:
+      - bluetooth_controllers.stdout_lines | default([]) | select('match', '^Controller ') | list | length > 0
+    fail_msg: No Bluetooth controller is available. Check the adapter, firmware, hardware switch, and rfkill state.
+  when:
+    - not ansible_check_mode
+    - bluetoothctl_binary.stat.isreg | default(false)
+
+- name: Inspect managed Bluetooth audio devices
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - info
+      - "{{ item.address }}"
+  loop: "{{ desktop_bluetooth.audio_devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: bluetooth_audio_device_info
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - bluetoothctl_binary.stat.isreg | default(false)
+    - bluetooth_controllers.stdout_lines | default([]) | select('match', '^Controller ') | list | length > 0
+
+- name: Trust paired Bluetooth audio devices
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - trust
+      - "{{ item.item.address }}"
+  loop: "{{ bluetooth_audio_device_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.stdout | default('') is search('(?m)^\s*Paired:\s+yes\s*$')
+    - item.stdout | default('') is not search('(?m)^\s*Trusted:\s+yes\s*$')
+  changed_when: true
+  no_log: true
+
+- name: Reinspect managed Bluetooth audio devices
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bluetoothctl
+      - info
+      - "{{ item.address }}"
+  loop: "{{ desktop_bluetooth.audio_devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: bluetooth_audio_device_final_info
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - bluetoothctl_binary.stat.isreg | default(false)
+    - bluetooth_controllers.stdout_lines | default([]) | select('match', '^Controller ') | list | length > 0
+
+- name: Confirm trust for devices that are already paired
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or item.stdout | default('') is search('(?m)^\s*Trusted:\s+yes\s*$')
+    fail_msg: "{{ item.item.name }} is paired but could not be verified as trusted."
+  loop: "{{ bluetooth_audio_device_final_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - item.stdout | default('') is search('(?m)^\s*Paired:\s+yes\s*$')
+
+- name: Report devices that still require interactive pairing
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }} is not paired on {{ inventory_hostname }}.
+      Put it in pairing mode, pair it interactively with bluetoothctl, then rerun this recipe to persist and verify trust.
+  loop: "{{ bluetooth_audio_device_final_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - item.stdout | default('') is not search('(?m)^\s*Paired:\s+yes\s*$')

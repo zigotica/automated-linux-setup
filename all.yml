@@ -2,6 +2,9 @@
 - name: Configure packages
   ansible.builtin.import_playbook: playbooks/site.yml
 
+- name: Configure desktop Bluetooth audio
+  ansible.builtin.import_playbook: playbooks/bluetooth.yml
+
 - name: Configure the primary user and Figurine
   ansible.builtin.import_playbook: playbooks/user-config.yml
 

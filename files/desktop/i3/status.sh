@@ -7,7 +7,7 @@ white='#dddddd'
 gray='#888888'
 
 widget_dir="$(dirname -- "${BASH_SOURCE[0]}")/widgets"
-widgets=(cpu ram disk wifi volume clock)
+widgets=(cpu temp ram disk wifi volume clock)
 for widget in "${widgets[@]}"; do
     source "$widget_dir/$widget.sh" || exit 1
 done
