@@ -377,6 +377,8 @@ iface wlan1 inet dhcp
     self.assertIn("trip_point_*_type", widget)
     self.assertIn("_crit", widget)
     self.assertNotIn("sensors", widget)
+    validation = "source /dev/stdin; temperature_critical_is_valid 1; temperature_critical_is_valid 200000; ! temperature_critical_is_valid 0; ! temperature_critical_is_valid -274000"
+    subprocess.run(["bash", "-c", validation], input=widget, text=True, check=True)
     status = (ROOT / "files/desktop/i3/status.sh").read_text()
     self.assertIn("widgets=(cpu temp ram disk wifi volume clock)", status)
 
