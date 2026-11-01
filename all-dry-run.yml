@@ -16,6 +16,9 @@
 - name: Preview the package configuration
   ansible.builtin.import_playbook: playbooks/site.yml
 
+- name: Preview optional zram swap
+  ansible.builtin.import_playbook: playbooks/zram.yml
+
 - name: Preview desktop Bluetooth audio
   ansible.builtin.import_playbook: playbooks/bluetooth.yml
 

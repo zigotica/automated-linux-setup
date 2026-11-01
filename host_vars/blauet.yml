@@ -9,6 +9,8 @@ system_hostname: blauet
 dns_interface: wlo1
 wifi_interface: wlo1
 wifi_power_save: 'off'
+zram_enabled: true
+zram_size_mb: 3072
 
 # Physical F-key numbers for this laptop's i3 brightness, volume, and media controls.
 i3_fn_keys:

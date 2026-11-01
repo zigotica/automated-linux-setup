@@ -1,0 +1,6 @@
+[zram0]
+{% if zram_size_mb is defined %}
+zram-size = {{ zram_size_mb }}
+{% endif %}
+compression-algorithm = {{ zram_compression_algorithm | default('lz4') }}
+swap-priority = {{ zram_swap_priority | default(100) }}

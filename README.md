@@ -139,6 +139,7 @@ Run a recipe independently when only one configuration area is needed:
 | Recipe | Purpose |
 | --- | --- |
 | `playbooks/site.yml` | Install the declared Debian package set |
+| `playbooks/zram.yml` | Configure zram swap only when `zram_enabled` is true |
 | `playbooks/bluetooth.yml` | Configure and verify desktop-only BlueZ and PipeWire/WirePlumber Bluetooth audio |
 | `playbooks/bluetooth-pair.yml` | Perform one explicitly authorized, bounded pairing attempt for vaulted desktop audio devices |
 | `playbooks/neovim.yml` | Install the newest stable patch in the configured Neovim series |
@@ -163,7 +164,20 @@ User configuration and SSH-key authorization run without sudo. System recipes re
 
 ## Packages and user files
 
-The package recipe ensures `debian_packages` are present with `install_recommends: false`. It does not refresh the APT cache, request system-wide upgrades, or remove packages omitted from the list. The selected list combines `debian_common_packages`, `debian_desktop_packages` only for desktops, and `debian_wifi_packages` only when Wi-Fi management is enabled. The common list includes Git, fzf, ripgrep, less, lsof, hardware-inspection utilities, and wget; servers do not inherit graphical, audio/Bluetooth, or Wi-Fi packages by default.
+The package recipe ensures `debian_packages` are present with `install_recommends: false`. It does not refresh the APT cache, request system-wide upgrades, or remove packages omitted from the list. The selected list combines `debian_common_packages`, `debian_desktop_packages` only for desktops, `debian_wifi_packages` only when Wi-Fi management is enabled, and `debian_zram_packages` only when zram is enabled. The common list includes Git, fzf, ripgrep, less, lsof, hardware-inspection utilities, and wget; servers do not inherit graphical, audio/Bluetooth, Wi-Fi, or zram packages by default.
+
+### Optional zram swap
+
+Zram is disabled by default when `zram_enabled` is undefined. An enabled host installs only `systemd-zram-generator`, renders `/etc/systemd/zram-generator.conf`, and persists `vm.swappiness` in `/etc/sysctl.d/99-zram.conf`. Without a host-specific size, the template omits `zram-size` and uses the generator's native `min(ram / 2, 4096)` MB default. Hosts can override it with a positive integer `zram_size_mb`; `blauet` sets `3072` for 3 GiB. LZ4 compression, swap priority 100, and swappiness 100 remain the enabled defaults and can be overridden through `zram_compression_algorithm`, `zram_swap_priority`, and `zram_swappiness`. Generator configuration changes reload systemd and restart the generator's setup service, which owns device reset and recreation; failed setup is recovered through the same service. Unchanged healthy runs leave the active device alone.
+
+Install the conditional package before applying the configuration:
+
+```bash
+ansible-playbook playbooks/site.yml --limit blauet --check --diff --ask-become-pass
+ansible-playbook playbooks/site.yml --limit blauet --diff --ask-become-pass
+ansible-playbook playbooks/zram.yml --limit blauet --check --diff --ask-become-pass
+ansible-playbook playbooks/zram.yml --limit blauet --diff --ask-become-pass
+```
 
 Neovim is installed from checksum-verified official upstream archives by the user-configuration recipe or independently through `playbooks/neovim.yml`. It tracks the newest stable patch in `neovim_series: '0.12'` and installs into the fixed directory `~/.local/opt/neovim/current/`. The managed Bash profile adds its `bin` directory directly to PATH, without an alias or symlink. Updates replace this installation in place and leave Debian's packaged executable untouched.
 

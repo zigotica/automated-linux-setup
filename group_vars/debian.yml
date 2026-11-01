@@ -71,6 +71,8 @@ debian_wifi_packages:
   - rfkill
   - wireless-tools
   - wpasupplicant
+debian_zram_packages:
+  - systemd-zram-generator
 
 neovim_architectures:
   x86_64: x86_64
@@ -114,4 +116,5 @@ debian_desktop_packages:
 debian_packages: >-
   {{ (debian_common_packages
       + (debian_desktop_packages if machine_profile == 'desktop' else [])
-      + (debian_wifi_packages if manage_wifi else [])) | unique | list }}
+      + (debian_wifi_packages if manage_wifi else [])
+      + (debian_zram_packages if zram_enabled | default(false) else [])) | unique | list }}

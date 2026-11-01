@@ -1,0 +1,15 @@
+---
+- name: Configure optional zram swap on an explicitly selected Debian machine
+  hosts: debian
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+
+  pre_tasks:
+    - name: Enforce explicit target selection
+      ansible.builtin.import_tasks: ../tasks/validate_target.yml
+
+  tasks:
+    - name: Configure zram swap
+      ansible.builtin.import_tasks: ../tasks/common/zram.yml
+      when: zram_enabled | default(false)

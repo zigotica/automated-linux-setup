@@ -21,6 +21,7 @@
       - manage_dns is boolean
       - manage_git_work is boolean
       - manage_family is boolean
+      - (zram_enabled | default(false)) is boolean
       - not manage_touchpad or machine_profile == 'desktop'
       - not manage_family or machine_profile == 'desktop'
       - not manage_family or primary_user != 'family'

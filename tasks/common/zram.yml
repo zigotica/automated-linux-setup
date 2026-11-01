@@ -1,0 +1,79 @@
+---
+- name: Validate zram settings
+  ansible.builtin.assert:
+    that:
+      - zram_size_mb is not defined or zram_size_mb is integer
+      - zram_size_mb is not defined or zram_size_mb > 0
+      - (zram_compression_algorithm | default('lz4')) is string
+      - (zram_compression_algorithm | default('lz4')) is match('^[a-z0-9_-]+$')
+      - (zram_swap_priority | default(100)) is integer
+      - (zram_swappiness | default(100)) is integer
+      - (zram_swappiness | default(100)) >= 0
+      - (zram_swappiness | default(100)) <= 200
+    fail_msg: Define a valid zram size, compression algorithm, swap priority, and swappiness from 0 to 200.
+
+- name: Configure the zram generator
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../files/common/zram-generator.conf.j2"
+    dest: /etc/systemd/zram-generator.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: zram_generator_config
+
+- name: Inspect the zram setup service
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - systemd-zram-setup@zram0.service
+  register: zram_setup_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd after configuration changes or failed setup
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: zram_generator_config.changed or zram_setup_status.rc != 0
+
+- name: Recreate zram after configuration changes or failed setup
+  ansible.builtin.systemd_service:
+    name: systemd-zram-setup@zram0.service
+    state: restarted
+  when:
+    - zram_generator_config.changed or zram_setup_status.rc != 0
+    - not ansible_check_mode
+
+- name: Start zram swap
+  ansible.builtin.systemd_service:
+    name: dev-zram0.swap
+    state: started
+  when: not ansible_check_mode
+
+- name: Persist zram swappiness
+  ansible.builtin.copy:
+    content: "vm.swappiness = {{ zram_swappiness | default(100) }}\n"
+    dest: /etc/sysctl.d/99-zram.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Read active swappiness
+  ansible.builtin.command:
+    argv:
+      - /sbin/sysctl
+      - -n
+      - vm.swappiness
+  register: active_zram_swappiness
+  changed_when: false
+  check_mode: false
+
+- name: Apply zram swappiness
+  ansible.builtin.command:
+    argv:
+      - /sbin/sysctl
+      - -w
+      - "vm.swappiness={{ zram_swappiness | default(100) }}"
+  when: active_zram_swappiness.stdout | int != zram_swappiness | default(100)
+  changed_when: true

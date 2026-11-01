@@ -46,6 +46,7 @@ class Profiles(unittest.TestCase):
     self.assertEqual(self.defaults["machine_profile"], "server")
     for switch in ("manage_wifi", "manage_touchpad", "manage_dns", "manage_git_work", "manage_family"):
       self.assertIs(self.defaults[switch], False)
+    self.assertNotIn("zram_enabled", self.defaults)
     self.assertEqual(self.packages(self.defaults), self.defaults["debian_common_packages"])
     self.assertNotIn("git_user_name", self.defaults)
     self.assertNotIn("git_user_email", self.defaults)
@@ -53,7 +54,8 @@ class Profiles(unittest.TestCase):
   def test_desktop_preserves_all_groups(self):
     expected = set(self.defaults["debian_common_packages"]
                    + self.defaults["debian_desktop_packages"]
-                   + self.defaults["debian_wifi_packages"])
+                   + self.defaults["debian_wifi_packages"]
+                   + self.defaults["debian_zram_packages"])
     self.assertEqual(set(self.packages(self.desktop)), expected)
     for switch in ("manage_wifi", "manage_touchpad", "manage_dns"):
       self.assertIs(self.desktop[switch], True)
@@ -62,6 +64,36 @@ class Profiles(unittest.TestCase):
     self.assertIn("i3-wm", self.packages(self.desktop))
     self.assertNotIn("task-xfce-desktop", self.packages(self.desktop))
     self.assertTrue(self.desktop["manage_family"])
+
+  def test_zram_is_opt_in_and_configurable(self):
+    self.assertTrue(self.desktop["zram_enabled"])
+    self.assertIn("systemd-zram-generator", self.packages(self.desktop))
+    self.assertNotIn("systemd-zram-generator", self.packages(self.defaults))
+    for variable in ("zram_size_mb", "zram_compression_algorithm", "zram_swap_priority", "zram_swappiness"):
+      self.assertNotIn(variable, self.defaults)
+    template = (ROOT / "files/common/zram-generator.conf.j2").read_text()
+    rendered_default = ENV.from_string(template).render()
+    rendered_blauet = ENV.from_string(template).render(self.desktop)
+    self.assertNotIn("zram-size", rendered_default)
+    self.assertIn("zram-size = 3072", rendered_blauet)
+    self.assertNotIn("3G", rendered_blauet)
+    play = load("playbooks/zram.yml")[0]
+    self.assertEqual(play["tasks"][0]["when"], "zram_enabled | default(false)")
+    tasks = load("tasks/common/zram.yml")
+    restart = next(task for task in tasks
+                   if task["name"] == "Recreate zram after configuration changes or failed setup")
+    self.assertEqual(restart["ansible.builtin.systemd_service"]["name"],
+                     "systemd-zram-setup@zram0.service")
+    self.assertEqual(restart["ansible.builtin.systemd_service"]["state"], "restarted")
+    self.assertIn("zram_generator_config.changed or zram_setup_status.rc != 0", restart["when"])
+    self.assertFalse(any("zramctl" in str(task) for task in tasks))
+    reload_systemd = next(task for task in tasks
+                          if task["name"] == "Reload systemd after configuration changes or failed setup")
+    self.assertEqual(reload_systemd["when"],
+                     "zram_generator_config.changed or zram_setup_status.rc != 0")
+    for entry in ("all.yml", "all-dry-run.yml"):
+      self.assertTrue(any(item.get("ansible.builtin.import_playbook") == "playbooks/zram.yml"
+                          for item in load(entry)))
 
   def test_bluetooth_audio_is_desktop_only_and_complete(self):
     required = {
